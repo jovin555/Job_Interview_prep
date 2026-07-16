@@ -8,7 +8,7 @@
 - **Total Ionizing Dose (TID):** Cumulative damage from radiation over the mission lifetime, which shifts threshold voltages in MOSFETs, increases leakage current, and degrades timing performance.
 - **Displacement Damage:** Non-ionizing energy loss that degrades minority carrier lifetime in bipolar devices and optoelectronics.
 
-In my experience designing the **5W High-Reliability EDFA** for space-qualified booster modules, we had to specify 50 kRad (Si) total dose tolerance. This meant selecting radiation-hardened STM32 variants, using external DACs and ADCs with known TID performance, and implementing watchdog timers and EDAC (Error Detection and Correction) on critical data paths to mitigate SEUs. We also added current-limiting circuitry on power rails to protect against latch-up events.
+In my experience designing the **Project W** for space-qualified booster modules, we had to specify 50 kRad (Si) total dose tolerance. This meant selecting radiation-hardened STM32 variants, using external DACs and ADCs with known TID performance, and implementing watchdog timers and EDAC (Error Detection and Correction) on critical data paths to mitigate SEUs. We also added current-limiting circuitry on power rails to protect against latch-up events.
 
 **Possible follow-ups:**
 - How would you test a design to verify it meets a 50 kRad specification?
@@ -18,11 +18,11 @@ In my experience designing the **5W High-Reliability EDFA** for space-qualified 
 
 ## Q2: Explain how you would design a power supply for a space-rated system that must survive a single event latch-up condition without being destroyed.
 
-**Answer:** A power supply for a space system must be designed to detect and safely clear latch-up events without damaging the load or the supply itself. The approach I used on the **5W High-Reliability EDFA** project involved several layers of protection:
+**Answer:** A power supply for a space system must be designed to detect and safely clear latch-up events without damaging the load or the supply itself. The approach I used on the **Project W** project involved several layers of protection:
 
 1. **Current-limiting on each power rail:** We used precision current-sense resistors feeding comparators with programmable thresholds. If current exceeded the normal operating range by a margin (typically 1.5–2x), the comparator would trigger a shutdown sequence.
 2. **Active latch-up detection and recovery:** Rather than a simple fuse (which is one-shot and unacceptable in space), we implemented a fold-back current limiter followed by a timed power-cycle. The controller would cut power for ~100ms, then re-apply it. If the latch-up condition cleared, normal operation resumed. If it persisted, the controller would attempt a limited number of retries before entering a safe state.
-3. **Hot-swap protection:** The EDFA module included hot-swap controllers that provided inrush current limiting and overcurrent protection, which also served as a first line of defense against latch-up events.
+3. **Hot-swap protection:** The Project W module included hot-swap controllers that provided inrush current limiting and overcurrent protection, which also served as a first line of defense against latch-up events.
 4. **Redundancy:** Critical power rails had redundant regulators with OR-ing diodes, so if one regulator latched up and shut down, the redundant path maintained power to the load.
 
 The key design consideration is that the detection and recovery circuitry itself must be radiation-hardened, otherwise it becomes a single point of failure.
@@ -47,7 +47,7 @@ The key design consideration is that the detection and recovery circuitry itself
 | **Derating** | Standard derating per medical guidelines | Aggressive derating (often 50% of rated voltage/current) |
 | **Cost sensitivity** | Moderate | Low (mission success is paramount) |
 
-In my work on the **Lotus Toco device** (medical), we focused on isolation, leakage current, and single-fault condition testing per IEC 60601. For the **5W EDFA** (space), we focused on TID tolerance, SEU mitigation through hardware redundancy, and selecting parts with known radiation performance. The design review processes were similar in rigor, but the technical focus areas were completely different.
+In my work on the **Project Y device** (medical), we focused on isolation, leakage current, and single-fault condition testing per IEC 60601. For **Project W** (space), we focused on TID tolerance, SEU mitigation through hardware redundancy, and selecting parts with known radiation performance. The design review processes were similar in rigor, but the technical focus areas were completely different.
 
 **Possible follow-ups:**
 - Could you use a medical-grade component in a space design? What would be the risks?
@@ -57,7 +57,7 @@ In my work on the **Lotus Toco device** (medical), we focused on isolation, leak
 
 ## Q4: Describe the architecture you would use for a microcontroller-based system that must tolerate single event upsets in its program memory.
 
-**Answer:** For a radiation-hardened microcontroller system like the one in the **5W High-Reliability EDFA**, where we used STM32 microcontrollers with external DAC/ADC, the architecture must address SEUs in both program memory (Flash) and data memory (SRAM). Here's the approach:
+**Answer:** For a radiation-hardened microcontroller system like the one in the **Project W**, where we used STM32 microcontrollers with external DAC/ADC, the architecture must address SEUs in both program memory (Flash) and data memory (SRAM). Here's the approach:
 
 **For program memory (Flash):**
 1. **ECC-protected Flash:** Use a microcontroller with built-in Error Correction Code on the Flash memory. Most rad-tolerant MCUs support single-bit error correction and double-bit error detection (SECDED).
@@ -75,7 +75,7 @@ In my work on the **Lotus Toco device** (medical), we focused on isolation, leak
 - Implement read-back verification: after writing a DAC value, read it back to confirm
 - Use redundant ADC readings with median filtering to reject single-event transients
 
-The STM32 in the EDFA project had hardware ECC on Flash, and we implemented software-based triple redundancy for the control loop state machine that managed the laser pump diode current.
+The STM32 in the Project W project had hardware ECC on Flash, and we implemented software-based triple redundancy for the control loop state machine that managed the laser pump diode current.
 
 **Possible follow-ups:**
 - How do you handle SEUs in the external ADC itself, which may not have radiation-hardened specifications?
@@ -85,7 +85,7 @@ The STM32 in the EDFA project had hardware ECC on Flash, and we implemented soft
 
 ## Q5: Behavioral: Tell me about a time you had to make a design trade-off between radiation hardening requirements and another constraint like cost, size, or performance.
 
-**Answer:** **Situation:** During the **5W High-Reliability EDFA** project, we were designing a space-qualified booster module that needed to fit within a very tight volume envelope while meeting 50 kRad total dose tolerance. The initial architecture used a single STM32 microcontroller with integrated DACs and ADCs, which was compact but the integrated peripherals had limited radiation data.
+**Answer:** **Situation:** During the **Project W** project, we were designing a space-qualified booster module that needed to fit within a very tight volume envelope while meeting 50 kRad total dose tolerance. The initial architecture used a single STM32 microcontroller with integrated DACs and ADCs, which was compact but the integrated peripherals had limited radiation data.
 
 **Task:** I needed to decide whether to use the integrated STM32 peripherals (smaller, lower cost, but unproven for radiation) or add external radiation-hardened DACs and ADCs (larger, more expensive, but guaranteed performance).
 
