@@ -1,0 +1,14 @@
+{
+  "start_date": "2026-07-15",
+  "questions_per_day": 5,
+  "rotation": [
+    "hardware-design",
+    "firmware",
+    "medical-devices",
+    "protocols",
+    "space-rad-hard",
+    "tools",
+    "behavioral-leadership",
+    "debugging-failure-analysis"
+  ]
+}
