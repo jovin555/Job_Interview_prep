@@ -9,7 +9,9 @@ Each day, one topic (rotating through the list below) gets 5 new interview
 Q&A entries, generated from a grounding-facts file (`docs/project-context.md`)
 so answers stay tied to real project experience rather than invented details.
 
-**Daily log:** [`content/`](content/) — latest seeded entry:
+**Daily log site:** https://jovin555.github.io/Job_Interview_prep/
+
+**Daily log (source):** [`content/`](content/) — latest seeded entry:
 [`content/hardware-design/day-1.md`](content/hardware-design/day-1.md)
 
 ## Structure
@@ -23,6 +25,8 @@ scripts/
   generate_daily_entry.py   — generation script (called by the GitHub Action)
 .github/workflows/
   daily-log.yml              — daily cron: generates + commits the day's entry
+  deploy-site.yml            — builds the Quartz site and deploys to GitHub Pages
+quartz/, quartz.ts, quartz.config.yaml — Quartz 5 static site generator
 ```
 
 ## Topics (8-day rotation)
@@ -54,8 +58,19 @@ pip install anthropic
 python3 scripts/generate_daily_entry.py
 ```
 
+## Publishing
+
+Built with [Quartz 5](https://quartz.jzhao.xyz/), same generator as the
+reference repo. `deploy-site.yml` builds `content/` and deploys to GitHub
+Pages on every push to `main`. To preview locally:
+
+```bash
+npm ci
+npx quartz plugin install
+npx quartz build --serve
+```
+
 ## Status
 
-Local scaffold — not yet pushed to GitHub. Repo is intended to be **private**.
-Note: GitHub Pages on a private repository requires a paid GitHub plan
-(Pro/Team/Enterprise); confirm before wiring up the Quartz publishing step.
+Public repo, pushed to GitHub. Pages requires enabling "GitHub Actions" as
+the Pages source in repo Settings before `deploy-site.yml` can publish.

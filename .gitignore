@@ -1,4 +1,16 @@
-__pycache__/
-*.pyc
+.DS_Store
 .env
 Jovin Basil - Embedded Systems Engineer.pdf
+node_modules
+.obsidian
+private/
+prof
+public
+*.pyc
+__pycache__/
+.quartz/
+.quartz-cache
+quartz/cli/tui/dist/
+.replit
+replit.nix
+tsconfig.tsbuildinfo
