@@ -5,7 +5,7 @@ Rotation, start date, and questions-per-day are configured in topics.json.
 Grounding facts (real projects/roles) live in docs/project-context.md and are
 sent to the model on every run so answers stay tied to actual experience.
 
-Requires ANTHROPIC_API_KEY in the environment. Run from the repo root:
+Requires DEEPSEEK_API_KEY in the environment. Run from the repo root:
     python3 scripts/generate_daily_entry.py
 """
 import datetime
@@ -15,13 +15,14 @@ import re
 import sys
 from pathlib import Path
 
-import anthropic
+import requests
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONTENT_DIR = REPO_ROOT / "content"
 CONTEXT_FILE = REPO_ROOT / "docs" / "project-context.md"
 CONFIG_FILE = REPO_ROOT / "scripts" / "topics.json"
-MODEL = "claude-sonnet-5"
+DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
+MODEL = "deepseek-chat"
 
 
 def load_config() -> dict:
@@ -29,6 +30,11 @@ def load_config() -> dict:
 
 
 def topic_for_today(config: dict) -> str:
+    override = os.environ.get("TOPIC_OVERRIDE")
+    if override:
+        if override not in config["rotation"]:
+            sys.exit(f"TOPIC_OVERRIDE {override!r} is not in the rotation list")
+        return override
     start = datetime.date.fromisoformat(config["start_date"])
     today = datetime.date.today()
     days_elapsed = (today - start).days
@@ -76,9 +82,9 @@ OUTPUT FORMAT (markdown, follow exactly):
 
 
 def main() -> None:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
     if not api_key:
-        sys.exit("ANTHROPIC_API_KEY is not set")
+        sys.exit("DEEPSEEK_API_KEY is not set")
 
     config = load_config()
     topic = topic_for_today(config)
@@ -89,13 +95,19 @@ def main() -> None:
     context = CONTEXT_FILE.read_text()
     prompt = build_prompt(topic, day_number, config["questions_per_day"], context)
 
-    client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}],
+    response = requests.post(
+        DEEPSEEK_API_URL,
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={
+            "model": MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+            "max_tokens": 4096,
+        },
+        timeout=120,
     )
-    entry_text = response.content[0].text
+    response.raise_for_status()
+    entry_text = response.json()["choices"][0]["message"]["content"]
 
     out_path = topic_dir / f"day-{day_number}.md"
     out_path.write_text(entry_text)

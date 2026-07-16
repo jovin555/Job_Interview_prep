@@ -43,19 +43,23 @@ quartz/, quartz.ts, quartz.config.yaml — Quartz 5 static site generator
 ## Automation
 
 A GitHub Actions workflow runs daily, determines whose turn it is in the
-rotation (based on `scripts/topics.json`), calls the Anthropic API with
+rotation (based on `scripts/topics.json`), calls the DeepSeek API with
 `docs/project-context.md` as grounding context, and commits the new
 `content/<topic>/day-N.md` file.
 
-Requires an `ANTHROPIC_API_KEY` repo secret to be set before the workflow can
-run.
+Requires a `DEEPSEEK_API_KEY` repo secret to be set before the workflow can
+run. The workflow can also be triggered manually (`workflow_dispatch`) with
+an optional `topic` input to override the day's rotation pick — useful for
+backfilling multiple topics in one day.
 
 ## Manual use
 
 ```bash
-export ANTHROPIC_API_KEY=sk-...
-pip install anthropic
+export DEEPSEEK_API_KEY=sk-...
+pip install requests
 python3 scripts/generate_daily_entry.py
+# or override the topic:
+TOPIC_OVERRIDE=firmware python3 scripts/generate_daily_entry.py
 ```
 
 ## Publishing

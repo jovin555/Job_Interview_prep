@@ -3,7 +3,12 @@ name: Daily Interview Log
 on:
   schedule:
     - cron: "0 11 * * *" # 11:00 UTC daily
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: "Override the rotation and generate for this topic instead (used for manual backfill)"
+        required: false
+        type: string
 
 jobs:
   generate:
@@ -18,11 +23,12 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install anthropic
+        run: pip install requests
 
       - name: Generate today's entry
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          TOPIC_OVERRIDE: ${{ inputs.topic }}
         run: python3 scripts/generate_daily_entry.py
 
       - name: Commit and push
