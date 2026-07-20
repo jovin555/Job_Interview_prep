@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Generate one day's interview Q&A entry for the topic whose turn it is today.
+"""Generate today's interview Q&A entry for every topic in the rotation.
 
-Rotation, start date, and questions-per-day are configured in topics.json.
-Grounding facts (real projects/roles) live in docs/project-context.md and are
-sent to the model on every run so answers stay tied to actual experience.
+Topics and questions-per-day are configured in topics.json. Grounding facts
+(real projects/roles) live in docs/project-context.md and are sent to the
+model on every run so answers stay tied to actual experience.
 
 Requires DEEPSEEK_API_KEY in the environment. Run from the repo root:
     python3 scripts/generate_daily_entry.py
 """
-import datetime
 import json
 import os
 import re
@@ -29,17 +28,13 @@ def load_config() -> dict:
     return json.loads(CONFIG_FILE.read_text())
 
 
-def topic_for_today(config: dict) -> str:
+def topics_for_today(config: dict) -> list[str]:
     override = os.environ.get("TOPIC_OVERRIDE")
     if override:
         if override not in config["rotation"]:
             sys.exit(f"TOPIC_OVERRIDE {override!r} is not in the rotation list")
-        return override
-    start = datetime.date.fromisoformat(config["start_date"])
-    today = datetime.date.today()
-    days_elapsed = (today - start).days
-    rotation = config["rotation"]
-    return rotation[days_elapsed % len(rotation)]
+        return [override]
+    return config["rotation"]
 
 
 def next_day_number(topic_dir: Path) -> int:
@@ -81,19 +76,12 @@ OUTPUT FORMAT (markdown, follow exactly):
 """
 
 
-def main() -> None:
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
-    if not api_key:
-        sys.exit("DEEPSEEK_API_KEY is not set")
-
-    config = load_config()
-    topic = topic_for_today(config)
+def generate_entry(topic: str, context: str, questions_per_day: int, api_key: str) -> None:
     topic_dir = CONTENT_DIR / topic
     topic_dir.mkdir(parents=True, exist_ok=True)
 
     day_number = next_day_number(topic_dir)
-    context = CONTEXT_FILE.read_text()
-    prompt = build_prompt(topic, day_number, config["questions_per_day"], context)
+    prompt = build_prompt(topic, day_number, questions_per_day, context)
 
     response = requests.post(
         DEEPSEEK_API_URL,
@@ -112,6 +100,18 @@ def main() -> None:
     out_path = topic_dir / f"day-{day_number}.md"
     out_path.write_text(entry_text)
     print(f"Wrote {out_path.relative_to(REPO_ROOT)}")
+
+
+def main() -> None:
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    if not api_key:
+        sys.exit("DEEPSEEK_API_KEY is not set")
+
+    config = load_config()
+    context = CONTEXT_FILE.read_text()
+
+    for topic in topics_for_today(config):
+        generate_entry(topic, context, config["questions_per_day"], api_key)
 
 
 if __name__ == "__main__":
