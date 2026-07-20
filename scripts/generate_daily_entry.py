@@ -47,9 +47,11 @@ def next_day_number(topic_dir: Path) -> int:
 
 
 def build_prompt(topic: str, day_number: int, questions_per_day: int, context: str) -> str:
-    return f"""You are generating interview preparation content for a real engineer
-based strictly on the grounding facts below. Do not invent experience,
-metrics, or projects that are not in the grounding facts.
+    return f"""You are generating generic interview preparation content, grounded
+by (but not narrated as) the background below. Do not invent metrics,
+dates, or outcomes. Never use real employer or product names — only the
+anonymized Company/Project placeholders in the grounding facts, and only
+where a concrete example genuinely helps.
 
 GROUNDING FACTS:
 {context}
@@ -58,10 +60,12 @@ TASK:
 Generate {questions_per_day} interview questions and model answers for the
 topic "{topic}", suitable for day {day_number} of an ongoing study log.
 Vary difficulty (include at least one deep technical question and one
-behavioral/experience question if the topic allows). Where an answer draws
-on experience, it must map to a specific project or role from the grounding
-facts. Follow-up questions an interviewer might ask should be included per
-entry.
+behavioral question if the topic allows). Phrase questions generically
+("How would you approach/debug/handle X?"), not as "Tell me about a time
+you achieved X" or "Describe a time when you...". Answers should read as
+sound reasoning and best practice a strong candidate would give — not a
+personal-achievement story with claimed results. Follow-up questions an
+interviewer might ask should be included per entry.
 
 OUTPUT FORMAT (markdown, follow exactly):
 

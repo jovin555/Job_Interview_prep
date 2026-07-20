@@ -8,6 +8,9 @@
     "space-rad-hard",
     "tools",
     "behavioral-leadership",
-    "debugging-failure-analysis"
+    "debugging-failure-analysis",
+    "high-speed-digital-fpga",
+    "embedded-linux-bsp",
+    "risk-requirements-traceability"
   ]
 }
