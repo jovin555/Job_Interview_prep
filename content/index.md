@@ -6,8 +6,8 @@ A daily interview-question log for a Senior Embedded Systems / Hardware
 Engineer role, covering medical device hardware/firmware, IEC60601
 compliance, and embedded systems design.
 
-Each day, one topic gets 5 new interview Q&A entries, generated from a
-grounding-facts file so answers stay tied to real project experience.
+Every day, all topics below get 5 new interview Q&A entries, generated from
+a grounding-facts file so answers stay tied to real project experience.
 
 ## Topics
 
@@ -19,3 +19,6 @@ grounding-facts file so answers stay tied to real project experience.
 - [[tools]] — Altium, Cadence Allegro, KiCad, Keil, MPLAB
 - [[behavioral-leadership]] — STAR-format leadership/ownership stories
 - [[debugging-failure-analysis]] — 8D root cause, bench debugging, test coverage
+- [[high-speed-digital-fpga]] — FPGAs, DDR, clock distribution, SI/PI at high frequency
+- [[embedded-linux-bsp]] — Linux BSP, drivers, multi-board bring-up, Yocto/Buildroot
+- [[risk-requirements-traceability]] — ISO 14971, DFMEA, SRS/ICDs, traceability matrices
