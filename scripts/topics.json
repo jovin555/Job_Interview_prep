@@ -12,5 +12,111 @@
     "high-speed-digital-fpga",
     "embedded-linux-bsp",
     "risk-requirements-traceability"
-  ]
+  ],
+  "topic_hints": {
+    "hardware-design": [
+      "power supply topologies: buck, boost, buck-boost, LDO regulators — selection trade-offs and compensation",
+      "passive component selection: ferrite beads, decoupling/bulk capacitors, inductor saturation, diode types (Schottky, TVS, rectifier) and their failure modes",
+      "op-amp circuit topologies: integrator, differentiator, instrumentation amplifier, active filters, comparator vs op-amp usage",
+      "ADC/DAC selection and characterization: resolution vs accuracy, sampling architectures (SAR, sigma-delta, pipeline), reference selection",
+      "key datasheet parameters and what they mean in practice: ENOB, SNR, THD, SINAD, CMRR, PSRR, offset voltage/current, bias current, slew rate, settling time, gain bandwidth product, input-referred noise",
+      "signal integrity and noise: grounding/decoupling strategy, EMI/EMC mitigation, shielding",
+      "transistors and MOSFETs: biasing networks, switching vs linear region operation, gate drive requirements and charge injection, thermal management and safe operating area (SOA) calculations",
+      "crystal oscillators and clock circuits: load capacitance, drive level, startup margin, jitter/phase noise considerations",
+      "protection circuits: overvoltage/overcurrent/ESD protection, reverse polarity protection, inrush current limiting, crowbar circuits",
+      "sensor front-end design: analog conditioning chain (amplification, filtering, offset correction), sensor excitation, noise budgeting for medical-grade measurements",
+      "battery management: Li-ion charging topologies (linear vs switching), fuel gauging, cell balancing, protection ICs, low-battery detection thresholds"
+    ],
+    "firmware": [
+      "Zephyr RTOS: kernel configuration, thread scheduling priorities, stack sizing, memory pools vs slabs, power management subsystem",
+      "embedded C best practices: MISRA-C compliance, volatile usage, bit manipulation, circular buffers, state machine implementation patterns",
+      "MicroPython on constrained hardware: memory profiling, interrupt handling limitations, when to drop to C for performance-critical paths",
+      "peripheral driver development: I2C/SPI bus arbitration, DMA configuration, interrupt latency budgeting, polling vs interrupt vs DMA trade-offs",
+      "bootloader design: dual-bank OTA updates, CRC verification, rollback strategy, secure boot chain considerations",
+      "low-power firmware techniques: sleep modes, wake-up sources, clock gating, peripheral shutdown sequencing, retention vs full power-off",
+      "watchdog timer strategy: windowed vs independent, kick timing, handling long operations without triggering reset, debug-mode bypass"
+    ],
+    "medical-devices": [
+      "IEC 60601-1 general safety: leakage current limits (patient vs operator), dielectric strength testing, creepage/clearance distances for medical PCBs",
+      "IEC 60601-1-2 EMC: radiated/conducted emissions limits for medical environments, immunity testing (ESD, radiated RF, magnetic fields), filtering strategies",
+      "IEC 60601-2 series particular standards: how to identify applicable collateral standards for a given device type (e.g., respiratory, monitoring, infusion)",
+      "risk management per ISO 14971: hazard identification, risk estimation, risk control verification, residual risk acceptance, risk management file structure",
+      "design history file (DHF) structure: design inputs/outputs, verification/validation traceability, design reviews, design transfer documentation",
+      "biocompatibility and materials: ISO 10993 testing requirements for patient-contacting parts, material selection for housings/sensors/cables",
+      "software validation for medical devices: IEC 62304 software safety classification, unit/integration/system testing, defect tracking, software release criteria",
+      "clinical evaluation and post-market surveillance: clinical evaluation report (CER), complaint handling, field safety corrective actions (FSCA)"
+    ],
+    "protocols": [
+      "I2C: bus capacitance limits, clock stretching, multi-master arbitration, address conflicts, pull-up resistor calculation for different bus speeds",
+      "SPI: clock polarity/phase modes, daisy-chain vs independent chip select, MISO contention avoidance, high-speed layout considerations (trace length matching)",
+      "UART: baud rate tolerance, flow control (RTS/CTS), break detection, framing errors, RS-232 vs RS-422 vs RS-485 electrical differences",
+      "RS-485: termination resistor calculation, stub length limits, fail-safe biasing, common-mode voltage range, half-duplex turn-around timing",
+      "CAN-FD: arbitration vs data phase bit rates, DLC encoding, E2E CRC, bus length vs bit rate trade-offs, error states and recovery",
+      "USB 2.0: device enumeration process, endpoint types (control/bulk/isochronous/interrupt), descriptor hierarchy, suspend/resume, VBUS detection",
+      "protocol selection methodology: throughput vs latency vs determinism vs cable length vs power-over-bus requirements for medical sensor networks"
+    ],
+    "space-rad-hard": [
+      "radiation effects: total ionizing dose (TID), single-event effects (SEE: SEU, SEL, SEFI, SET), displacement damage, latch-up mitigation strategies",
+      "rad-hard component selection: qualified manufacturers list (QML), derating guidelines, commercial off-the-shelf (COTS) vs rad-hard trade-offs",
+      "redundancy and voting: triple modular redundancy (TMR) for logic, memory scrubbing, watchdog timer diversity, cross-strapping",
+      "power system design for space: radiation-tolerant DC-DC converters, EMI filtering per MIL-STD-461, hot-swap and inrush control for 28V bus",
+      "thermal management in vacuum: conduction vs radiation cooling, thermal interface materials, derating for no-convection environments",
+      "testing and qualification: MIL-STD-883 test methods, burn-in, temperature cycling, vibration/shock, radiation testing at particle accelerators",
+      "project W specific context: STM32-based controller with external DAC/ADC for fiber amplifier control, hot-swap protection for redundant power feeds"
+    ],
+    "tools": [
+      "Altium Designer: schematic library management, hierarchical design, multi-channel design reuse, signal integrity analysis, output job configuration",
+      "Cadence Allegro: constraint manager setup, differential pair routing, via structures, cross-probing with OrCAD, DFM rule deck creation",
+      "KiCad: project organization, footprint association, 3D model integration, ERC/DRC setup, Gerber generation and verification with Gerbv",
+      "simulation tools: SPICE (LTSpice, PSpice) for transient/AC/noise analysis, SI/PI simulation (HyperLynx, SIwave), thermal simulation (Flotherm, Icepak)",
+      "version control for hardware: Git for firmware, Altium 365 or SVN for PCB projects, design revision history, release tagging",
+      "lab equipment proficiency: oscilloscope probing techniques (active vs passive, ground spring), spectrum analyzer for EMI sniffing, logic analyzer for protocol decode",
+      "firmware development tools: Keil uVision project configuration, MPLAB IDE debugger setup, Segger J-Link scripting, Zephyr west build system"
+    ],
+    "behavioral-leadership": [
+      "root-cause investigation framework: 8D methodology, fishbone diagram, 5 whys, containment vs corrective action, verification of effectiveness",
+      "cross-functional communication: translating hardware constraints to firmware team, presenting technical trade-offs to non-technical stakeholders",
+      "design review best practices: preparing review packages, constructive critique techniques, action item tracking, follow-up verification",
+      "mentoring and knowledge transfer: onboarding junior engineers, creating design guidelines, pair debugging sessions, documentation standards",
+      "project estimation and risk communication: breaking down tasks, identifying unknowns, communicating schedule impacts without overpromising",
+      "handling technical disagreements: data-driven decision making, prototyping to resolve disputes, escalation paths, documenting decisions with rationale",
+      "regulatory audit preparation: organizing DHF for inspector review, rehearsing technical explanations, handling non-conformances professionally"
+    ],
+    "debugging-failure-analysis": [
+      "systematic debug approach: isolate the variable, divide and conquer, reproduce consistently, measure vs simulate, one change at a time",
+      "power integrity debugging: ripple measurement at decoupling caps, ground bounce probing, load transient response, inrush current profiling",
+      "signal integrity troubleshooting: overshoot/undershoot analysis, ringing, crosstalk measurement, impedance mismatch identification via TDR",
+      "firmware-hardware interaction bugs: race conditions, missing pull-ups, GPIO configuration mismatches, timing violations, interrupt storm detection",
+      "thermal failure analysis: thermocouple placement, thermal camera imaging, junction temperature estimation from case temperature, derating verification",
+      "EMI debugging: near-field probe scanning, common-mode vs differential-mode identification, ferrite bead effectiveness, shielding grounding",
+      "medical device failure investigation: 8D process for field returns, fault injection testing, accelerated life testing, root cause to corrective action traceability"
+    ],
+    "high-speed-digital-fpga": [
+      "FPGA architecture: logic blocks, DSP slices, block RAM, clock management tiles (PLL/MMCM), I/O banks and standards, configuration memory",
+      "DDR memory interfaces: DDR3/DDR4 timing parameters, write/read leveling, on-die termination (ODT), fly-by topology, signal integrity for high-speed memory",
+      "clock generation and distribution: PLL jitter and phase noise, clock tree synthesis, global vs regional clock networks, clock domain crossing (CDC) synchronization",
+      "high-speed board-to-board interconnects: differential pair routing (impedance, skew), connector selection (SMA, HDMI, high-density mezzanine), AC coupling",
+      "signal integrity at high frequency: transmission line effects, stack-up design, via stub mitigation, return path discontinuities, pre-emphasis/de-emphasis",
+      "EMI/EMC for high-speed digital: spread spectrum clocking, filtering of I/O lines, shielding cans, ferrite common-mode chokes, PCB edge plating",
+      "FPGA design flow: RTL coding (Verilog/VHDL), synthesis constraints, timing closure, simulation (RTL vs gate-level), bitstream generation and verification"
+    ],
+    "embedded-linux-bsp": [
+      "Linux kernel architecture: kernel space vs user space, device driver models (char, block, platform), device tree bindings, kernel configuration with menuconfig",
+      "board support package structure: bootloader (U-Boot), kernel, device tree, root filesystem, boot sequence and initialization order",
+      "Yocto Project: recipe creation, layer management, image customization, bitbake workflow, SDK generation for cross-compilation",
+      "Buildroot: configuration via menuconfig, package selection, rootfs overlay, toolchain management, comparison with Yocto for smaller projects",
+      "ARM cross-compilation: toolchain selection (gcc-arm-none-eabi vs Linaro), sysroot setup, library linking (static vs dynamic), debugging with GDB",
+      "multi-processor bring-up: AMP vs SMP, inter-processor communication (mailbox, shared memory), resource partitioning, boot sequencing",
+      "driver development basics: GPIO, I2C/SPI bus drivers, interrupt handling, DMA engine usage, power management callbacks, kernel module vs built-in"
+    ],
+    "risk-requirements-traceability": [
+      "ISO 14971 risk management process: hazard identification, risk estimation matrix, risk control options, residual risk evaluation, risk management report",
+      "DFMEA methodology: function-based analysis, failure mode identification, severity/occurrence/detection ratings, RPN prioritization, action tracking",
+      "system requirements specification (SRS): functional vs non-functional requirements, measurable acceptance criteria, requirement hierarchy and numbering",
+      "architecture diagrams: block definition diagrams, interface diagrams, state machine diagrams, data flow diagrams for system-level design",
+      "interface control documents (ICD): electrical interface definitions, protocol specifications, timing diagrams, connector pin assignments",
+      "traceability matrices: requirements to design to verification to risk control, bidirectional traceability, gap analysis, coverage reporting",
+      "design verification vs validation: verification testing (did we build it right?), validation testing (did we build the right thing?), acceptance criteria"
+    ]
+  }
 }
