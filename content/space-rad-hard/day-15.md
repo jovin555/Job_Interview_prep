@@ -1,0 +1,81 @@
+# space-rad-hard — Day 15
+
+## Q1: How would you approach designing a radiation-tolerant analog front-end for a space-deployed system that must maintain measurement accuracy over a multi-year mission, considering both total ionizing dose (TID) and single-event transient (SET) effects?
+
+**Answer:** The approach starts with partitioning the signal chain into stages and analyzing each for both cumulative and transient radiation effects. For TID, the primary concern is parametric drift—offset voltage, bias current, gain error, and reference drift in op-amps, ADCs, and voltage references. I would select parts with known TID performance (ideally from a qualified manufacturers list or with published radiation data) and derate them so that worst-case end-of-life drift still meets the accuracy budget with margin. For example, if the mission requires 0.5% total accuracy, I might budget only 0.2% for radiation-induced drift, leaving room for temperature and aging effects.
+
+For SETs, the concern is different: a single heavy ion strike can cause a transient voltage spike at the output of an amplifier or a spurious conversion result in an ADC. Mitigation strategies include: placing a low-pass filter after each amplifier stage with a time constant longer than the expected SET duration (typically microseconds to tens of microseconds, depending on the circuit topology and ion LET); using a median filter or sample-and-hold voting in firmware—take three consecutive samples and use the median value; and implementing plausibility checks in software, such as rejecting samples that exceed a maximum slew rate or that fall outside a valid range for the measured parameter. For the ADC itself, I would consider using a SAR converter with an internal reference buffer rather than a delta-sigma, since SAR converters tend to have shorter SET recovery times. I would also add a windowed watchdog that monitors for repeated out-of-range readings and can trigger a re-calibration or channel reset if needed.
+
+Finally, I would design the layout to minimize charge collection: keep analog traces short, add guard rings around sensitive nodes, and avoid routing high-speed digital signals near the analog front-end. The key is to treat TID and SET as separate problems—TID is about budgeting and derating, SET is about filtering and redundancy—and to verify the combined approach through radiation testing of the actual circuit topology, not just individual components.
+
+**Possible follow-ups:** How would you choose between a hardware filter and a software median filter for SET mitigation? What test method would you use to characterize SET behavior in an amplifier?
+
+---
+
+## Q2: You are reviewing a design for a space-deployed system that uses a radiation-hardened FPGA and an external ADC for precision analog measurements. The designer has placed a ferrite bead in series with the ADC's analog supply to filter noise, but the ferrite bead is not radiation-characterized. How would you evaluate this choice?
+
+**Answer:** The first thing I would evaluate is whether the ferrite bead is actually necessary and whether it introduces more risk than it mitigates. Ferrite beads are passive components, and their radiation susceptibility is generally low—they are not semiconductor devices and do not have the same failure modes as active components. However, the concern is not the ferrite bead itself but the voltage drop it introduces under load and the impedance characteristics over temperature and current. A ferrite bead has DC resistance that causes a voltage drop, and if the ADC's supply current varies, the supply voltage at the ADC pin will vary. This could degrade the ADC's power supply rejection and introduce measurement error.
+
+I would also consider what happens under a single-event latch-up (SEL) condition in the ADC. If the ADC latches up and draws excessive current, the ferrite bead will limit the current, which is actually beneficial—it acts as a current limiter. But if the ferrite bead is not rated for the latch-up current, it could open up or change characteristics permanently. I would check the ferrite bead's current rating and ensure it can handle the worst-case latch-up current without damage.
+
+The bigger question is whether the ferrite bead is the right filtering approach. For an ADC analog supply, I would typically prefer a low-dropout regulator (LDO) with good ripple rejection, followed by a small RC filter or a ferrite bead with a bulk capacitor on the ADC side. The ferrite bead should be selected for its impedance at the noise frequency of interest, not just as a generic "noise filter." I would also verify that the ferrite bead's impedance does not resonate with the decoupling capacitors at a frequency that could cause instability.
+
+If the ferrite bead is not radiation-characterized, I would not automatically reject it—passive components are generally less sensitive to radiation than active ones. But I would require a rationale for its selection, a worst-case analysis of voltage drop and impedance over temperature and current, and a test plan to verify the ADC's performance with the ferrite bead in place under radiation. If the mission is long-duration and the ADC is critical, I might recommend replacing the ferrite bead with a simple resistor and capacitor filter, which has more predictable behavior and no magnetic material that could be affected by radiation.
+
+**Possible follow-ups:** What would you do if the ferrite bead's impedance changes significantly after total ionizing dose exposure? How would you verify the ADC's power supply rejection with the ferrite bead in place?
+
+---
+
+## Q3: How would you approach designing a fault-tolerant boot sequence for a space-deployed system that uses an external configuration memory (flash) for an SRAM-based FPGA, given that the configuration memory can experience single-event upsets?
+
+**Answer:** The boot sequence for an SRAM-based FPGA is a critical vulnerability because a single bit flip in the configuration bitstream can cause the FPGA to function incorrectly or not at all. The approach has several layers. First, I would use a configuration memory that has error detection and correction (ECC) built in, or I would implement ECC in the configuration controller. Many modern flash memories have internal ECC, but I would verify that it covers the entire memory array and that it can correct single-bit errors and detect double-bit errors. If the flash does not have ECC, I would store a CRC or checksum for each configuration frame and verify it before loading.
+
+Second, I would implement a two-stage boot process. The first stage is a small, radiation-hardened bootloader (either in a rad-hard microcontroller or in the FPGA's own configuration logic) that reads the configuration from flash, verifies the CRC, and loads it into the FPGA. If the CRC fails, the bootloader would retry with a redundant copy of the configuration stored in a different memory region or in a second flash device. The bootloader itself should be stored in radiation-hardened memory (e.g., a rad-hard PROM or a microcontroller with internal flash that is less susceptible to upsets).
+
+Third, I would consider using a "golden" configuration image that is stored in a write-protected memory and a "scratch" image that can be updated in flight. The boot sequence would first try the scratch image, and if it fails verification, fall back to the golden image. This allows for in-flight updates while ensuring the system can always boot.
+
+Fourth, I would implement a watchdog timer that monitors the boot process. If the FPGA does not assert a "configuration complete" signal within a specified time, the watchdog would trigger a reconfiguration attempt, and after a certain number of failed attempts, it would power-cycle the FPGA and start over. The watchdog should be independent of the FPGA—for example, a rad-hard timer or a microcontroller that is not affected by the same single-event upsets.
+
+Finally, I would consider scrubbing the configuration memory during operation. Even if the FPGA is configured correctly, the configuration memory can accumulate upsets over time. A scrubber (either in the FPGA fabric or in an external controller) would periodically read the configuration memory, check for errors, and correct them. This is especially important for long-duration missions where the probability of an upset in the configuration memory increases over time.
+
+The key trade-off is between boot time and reliability. A more thorough verification process (e.g., checking every frame's CRC) takes longer but catches more errors. I would design the boot sequence to be as fast as possible while still meeting the reliability requirements, and I would test the entire sequence under radiation to verify that it works as intended.
+
+**Possible follow-ups:** How would you handle a situation where the configuration memory itself is corrupted and the golden image is also corrupted? What is the maximum acceptable boot time for your system, and how would you balance that against the need for thorough verification?
+
+---
+
+## Q4: Imagine you are leading a design review for a space-deployed system that uses a COTS DC-DC converter to generate a 3.3V rail for digital logic. The converter's datasheet specifies a maximum output voltage of 3.47V under worst-case conditions, but your digital load (an FPGA) has an absolute maximum rating of 3.6V. A junior engineer argues this is acceptable because there is 130 mV of margin. How would you handle this disagreement?
+
+**Answer:** The junior engineer's argument is based on a static worst-case analysis, but it ignores several important factors. First, the 3.47V maximum is likely specified at a specific input voltage, load current, and temperature. Under different conditions—such as a transient load step, a sudden change in input voltage, or a radiation-induced single-event transient in the converter's feedback loop—the output voltage could exceed 3.47V. The 130 mV of margin might be consumed by these dynamic effects.
+
+Second, the FPGA's absolute maximum rating of 3.6V is not a recommended operating condition—it is the limit at which damage can occur. Operating near the absolute maximum, even briefly, can reduce the FPGA's reliability over time, especially in a radiation environment where the FPGA is already stressed by total ionizing dose and single-event effects. The margin should be measured from the recommended operating range, not the absolute maximum. If the FPGA's recommended operating range is, say, 3.0V to 3.45V, then the converter's 3.47V maximum is already outside the recommended range, and the 130 mV of margin is irrelevant.
+
+Third, I would consider the radiation effects on the converter itself. A COTS DC-DC converter may experience output voltage shifts due to total ionizing dose, and it may produce single-event transients on the output that could momentarily push the voltage above the absolute maximum. Without radiation data, we cannot assume the converter's output will stay within the datasheet specifications over the mission lifetime.
+
+My approach would be to: (1) ask the junior engineer to provide a detailed worst-case analysis that includes dynamic effects, temperature, and radiation-induced transients; (2) check the FPGA's recommended operating range and derating guidelines—many space programs require derating to 80% or less of the absolute maximum; (3) recommend adding a voltage supervisor or crowbar circuit that shuts down the rail if the voltage exceeds a safe threshold; and (4) consider replacing the COTS converter with a radiation-tolerant or rad-hard converter that has a tighter output voltage specification and known radiation performance. If the COTS converter is the only option, I would require radiation testing to characterize its output voltage behavior under TID and single-event effects.
+
+The key point is that margin is not just the difference between two numbers—it is the difference between the worst-case operating conditions and the safe operating limits, and it must account for all sources of variation, including radiation.
+
+**Possible follow-ups:** How would you determine the appropriate derating factor for the FPGA's supply voltage? What if the radiation testing shows the converter's output voltage stays within 3.3V ± 2% under radiation—would you then accept the design?
+
+---
+
+## Q5: How would you approach designing a test plan to verify that a space-deployed system can recover from a single-event functional interrupt (SEFI) that causes the main microcontroller to stop executing code?
+
+**Answer:** The test plan needs to address two aspects: (1) verifying that the system can detect a SEFI, and (2) verifying that it can recover from a SEFI without external intervention. The approach starts with defining what "recovery" means for the system—does it need to resume execution from the point of interruption, or is it acceptable to restart from a known state? For most space systems, restarting from a known state is acceptable, but the system must be able to re-initialize all peripherals and restore critical state (e.g., telemetry counters, configuration registers) without corrupting data.
+
+The test plan would include the following elements:
+
+1. **Fault injection testing:** Use a hardware fault injector (e.g., a test fixture that can force a reset, halt the clock, or corrupt the program counter) to simulate a SEFI. The goal is to verify that the watchdog timer (or other recovery mechanism) detects the fault and triggers a reset. I would test this at various points in the execution cycle—during initialization, during normal operation, and during a critical operation (e.g., writing to flash or communicating over a bus)—to ensure recovery works in all cases.
+
+2. **Watchdog timer verification:** The watchdog should be independent of the main microcontroller (e.g., a separate rad-hard timer or a second microcontroller). The test should verify that the watchdog is not inadvertently disabled by the SEFI and that it resets the microcontroller within the specified time. I would also test the watchdog's behavior if the microcontroller is stuck in a loop that periodically kicks the watchdog—this is a common failure mode where the SEFI causes the microcontroller to execute a tight loop that prevents it from doing useful work but still services the watchdog. To address this, the watchdog should be "windowed"—it must be kicked within a specific time window, not just at any time.
+
+3. **Power cycling test:** If the watchdog cannot recover the system (e.g., the SEFI has caused a latch-up or a stuck condition), the test plan should verify that a power cycle (either by a separate power controller or by a command from the ground) can recover the system. This requires a test that simulates a SEFI that the watchdog cannot handle and verifies that the power cycle restores the system to a known state.
+
+4. **Software recovery verification:** The test should verify that the software can detect a SEFI and take corrective action. For example, the software might periodically check a "heartbeat" variable that is incremented by a timer interrupt. If the heartbeat stops, the software would assume a SEFI and perform a controlled reset. The test would verify that this software-based recovery works in addition to the hardware watchdog.
+
+5. **End-to-end recovery test:** Finally, the test plan should include a full system-level test where a SEFI is injected during a realistic operational scenario (e.g., during a telemetry transmission or a sensor reading), and the system must recover and resume normal operation within a specified time. The test should verify that no data is corrupted and that the system's state is consistent after recovery.
+
+The key is to test the recovery mechanisms under realistic conditions, not just in isolation. A SEFI can occur at any time, so the recovery must be robust to the system's state at the time of the fault.
+
+**Possible follow-ups:** How would you test the system's recovery if the SEFI corrupts the microcontroller's program counter and it starts executing random memory? What is the maximum acceptable recovery time for your system, and how would you verify it?
