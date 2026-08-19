@@ -1,0 +1,67 @@
+# protocols — Day 29
+
+## Q1: How would you approach verifying that a mixed-signal PCB design with both high-speed digital interfaces and sensitive analog circuitry will meet its EMC requirements before committing to formal regulatory compliance testing?
+
+**Answer:** I'd structure pre-compliance verification in layers, starting with analysis before any hardware exists. During schematic and layout review, I'd examine return current paths for every high-speed trace — ensuring solid, unbroken reference planes beneath them and no slots or splits that force return currents to detour through the analog section. I'd check decoupling at every power pin, paying attention to the self-resonant frequency of the capacitors relative to the noise frequencies of interest, and verify that the analog and digital grounds are joined at a single, well-chosen point rather than creating a noisy common impedance.
+
+Once the board is built, I'd run a staged test sequence. First, I'd measure radiated emissions using a near-field probe and a spectrum analyzer to identify specific frequency hotspots — this lets me correlate emissions to specific traces or components before attempting fixes. I'd also perform conducted emissions testing on the power input lines. For immunity, I'd use ESD gun testing at the enclosure seams and connectors, and radiated immunity testing in a TEM cell if available. The key is to characterize the design's margin against the applicable limits — typically aiming for at least 6 dB of margin — so that when the formal test happens, there's headroom for unit-to-unit variation and test setup differences.
+
+I'd also pay attention to the cable and connector strategy, since cables often act as antennas. Common-mode chokes, ferrite beads, and proper shielding at the cable entry point are often necessary, and it's much easier to design them in from the start than to add them after a failed test.
+
+**Possible follow-ups:** How would you decide whether to use a solid ground plane versus a split ground plane for the analog and digital sections? What specific layout techniques would you use to minimize coupling between a high-speed SPI bus and a precision ADC input?
+
+---
+
+## Q2: You're debugging a system where a UART link between a microcontroller and a wireless module works reliably at 9600 baud but produces frequent framing errors at 115200 baud. The link is approximately 10 centimeters on the same PCB. How would you approach this?
+
+**Answer:** Since the distance is short and on the same PCB, signal integrity issues from cable capacitance or transmission line effects are less likely to be the primary cause — though not impossible. I'd start by checking the baud rate accuracy on both ends. At 115200 baud, the bit time is about 8.7 microseconds, so a typical UART can tolerate roughly ±2-3% total error between transmitter and receiver. If the microcontroller is using an internal RC oscillator, its accuracy might be specified at ±1-2% at room temperature but could drift with temperature and voltage. The wireless module might also have its own clock source with different tolerance. I'd measure the actual baud rate on both sides using an oscilloscope or logic analyzer, comparing the measured bit timing against nominal.
+
+If the clock accuracy checks out, I'd look at the signal integrity on the UART lines. Even at 10 centimeters, fast edge rates can cause ringing or reflections if the trace impedance isn't controlled or if there's excessive capacitance from the microcontroller pin, the module pin, and any protection components. I'd probe the signal at the receiver's pin to check for overshoot, undershoot, and slow rise/fall times. I'd also verify that the UART lines aren't running parallel to any noisy traces — for example, a switching regulator output or a high-speed clock line — that could couple noise into the signal.
+
+Another angle is the firmware configuration. I'd check whether the UART is configured for the correct parity, stop bits, and data length on both ends. A mismatch in any of these parameters would cause framing errors. I'd also verify that the receiver's FIFO and interrupt handling are configured correctly — if the firmware doesn't read the FIFO fast enough at the higher baud rate, data can be lost or misaligned, which can manifest as framing errors.
+
+**Possible follow-ups:** How would you determine whether the problem is in the transmitter, the receiver, or the physical channel? What would you do if the baud rate measurement showed the microcontroller's clock was 2% off at 115200 baud but within tolerance at 9600 baud?
+
+---
+
+## Q3: How would you approach designing a communication architecture for a medical device where a central controller needs to communicate with multiple sensor modules, some requiring deterministic real-time response and others generating high-volume data, while keeping the system modular and testable?
+
+**Answer:** I'd start by separating the requirements into categories: latency bounds, data volume, update rate, and criticality. The deterministic real-time sensors — for example, a pressure sensor that must be sampled at a fixed rate for closed-loop control — need a communication path with bounded latency and minimal jitter. The high-volume sensors — perhaps an imaging sensor or a high-rate accelerometer — need throughput but can tolerate some latency variation. These are fundamentally different requirements, so I'd likely use separate physical or logical channels rather than forcing everything onto one bus.
+
+For the deterministic path, I'd consider a dedicated SPI or I2C connection from the controller to each real-time sensor, or a CAN-FD network with carefully assigned message priorities and a scheduling analysis that proves worst-case latency. For the high-volume path, I'd use a higher-bandwidth interface like SPI with DMA, or USB if the data needs to reach a host. The key is to avoid having the high-volume traffic interfere with the deterministic traffic — either by using separate buses or by implementing a time-triggered schedule on a shared bus where each message type has a guaranteed slot.
+
+For modularity, I'd define a clean abstraction layer in firmware where each sensor module presents a standard interface — init, read, configure, self-test — regardless of the underlying transport. This lets me swap the physical interface without changing the application code. For testability, I'd design each sensor module to be testable in isolation using a test fixture that simulates the central controller, and I'd build in diagnostic hooks — such as bus utilization counters, error counters, and timestamped logs — so that field issues can be debugged without invasive instrumentation.
+
+I'd also consider the power and physical constraints. In a battery-powered device, the communication architecture must minimize active time and avoid unnecessary wake-ups. This might mean batching sensor reads, using interrupt-driven rather than polled communication, and putting the bus into a low-power state when idle.
+
+**Possible follow-ups:** How would you decide whether to use a single shared bus with a time-triggered schedule versus multiple dedicated buses? How would you handle the situation where a new sensor module is added to the system after the initial architecture is defined?
+
+---
+
+## Q4: Imagine you're leading a design review where a junior engineer proposes using a single CAN-FD bus for a medical device that carries both a safety-critical control message requiring delivery within 2 ms and high-volume telemetry data from multiple sensors. The engineer argues that CAN-FD's higher data rate in the data phase eliminates any bandwidth concerns. How would you guide the team to evaluate this approach?
+
+**Answer:** I'd acknowledge that CAN-FD's higher data phase rate does increase throughput, but I'd guide the team to recognize that throughput is not the same as determinism. The safety-critical message's 2 ms delivery requirement is a latency bound, not a bandwidth requirement. Even if the bus has plenty of spare bandwidth, the safety-critical message could still be delayed if a lower-priority message is already in transmission when the safety-critical message becomes ready to send. CAN-FD's arbitration mechanism ensures that the higher-priority message wins arbitration, but it cannot preempt a frame that has already started transmitting.
+
+So the first step would be to calculate the worst-case blocking time — the maximum time the safety-critical message might have to wait because another frame is mid-transmission. This depends on the maximum frame length, the bit rate in the arbitration phase, and the number of stuff bits. For a standard CAN-FD frame at 500 kbps arbitration bit rate, a 64-byte data frame can take over 500 microseconds to transmit. If the telemetry sensors are sending large frames frequently, the safety-critical message could be blocked for a significant portion of its 2 ms budget.
+
+I'd also ask the team to consider the priority assignment. The safety-critical message must have the highest priority in the arbitration field, but that alone doesn't guarantee the 2 ms bound if there are multiple high-priority messages or if the bus is heavily loaded. I'd recommend performing a formal worst-case response time analysis using established CAN scheduling theory, which accounts for the queuing delays, blocking times, and transmission times of all messages on the bus.
+
+Beyond the timing analysis, I'd raise the question of fault tolerance. If a sensor node malfunctions and starts transmitting continuously — a "babbling idiot" failure — it could monopolize the bus and prevent the safety-critical message from ever being sent. I'd ask whether the design includes mechanisms like bus-off recovery, error counters, and possibly a hardware guardian or a redundant communication path for the safety-critical message.
+
+Finally, I'd suggest that the team consider whether the telemetry data truly needs to share the same bus. If the telemetry is high-volume and non-critical, it might be better to use a separate bus or a different interface entirely, so that a telemetry fault cannot compromise the safety-critical path.
+
+**Possible follow-ups:** How would you perform the worst-case response time analysis for the safety-critical message? What fault-containment mechanisms would you require before accepting a single shared bus for both safety-critical and non-critical traffic?
+
+---
+
+## Q5: How would you approach handling a situation where a junior engineer on your team has implemented a communication protocol incorrectly, and the error is only discovered during regulatory compliance testing, causing a significant schedule delay?
+
+**Answer:** I'd start by separating the immediate technical problem from the broader process and team issues. The first priority is to understand the nature of the protocol error — is it a fundamental misunderstanding of the protocol specification, a subtle edge case that wasn't covered in the requirements, or a simple implementation bug? I'd work with the engineer to reproduce the failure, capture the exact failure mode, and trace it back to the specific code or configuration that caused it. This might involve reviewing the protocol specification together, comparing the implementation against the spec line by line, and using a logic analyzer or protocol analyzer to capture the actual bus traffic.
+
+Once the root cause is understood, I'd assess the impact on the compliance testing. Some protocol errors might be fixable with a firmware update that doesn't require re-running the full test suite — for example, if the error is in a non-safety-critical configuration parameter. Other errors might require re-running specific tests or even redesigning hardware if the error is in the physical layer. I'd work with the compliance team to understand which tests were affected and what the re-test requirements are.
+
+For the team and process side, I'd have a direct but constructive conversation with the junior engineer. The goal is not to assign blame but to understand what went wrong in the development process that allowed the error to go undetected until compliance testing. I'd ask questions like: Was the protocol specification clear? Were there adequate unit tests and integration tests? Was there a design review that should have caught this? Was the engineer working under time pressure that led to shortcuts? The answers would inform process improvements — for example, adding protocol conformance tests earlier in the development cycle, creating a checklist for design reviews, or pairing the junior engineer with a more experienced team member for protocol-related work.
+
+I'd also communicate transparently with stakeholders about the schedule impact and the plan to address it. In a medical device context, regulatory compliance is non-negotiable, so the schedule delay is unfortunate but necessary. I'd present a revised timeline with clear milestones and ensure that the fix is thoroughly verified before re-entering compliance testing.
+
+**Possible follow-ups:** How would you balance the need to maintain the project schedule with the need to ensure the fix is thoroughly verified? What specific process changes would you propose to prevent similar errors from reaching compliance testing in the future?
