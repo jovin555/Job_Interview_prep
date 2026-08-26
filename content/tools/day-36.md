@@ -1,0 +1,65 @@
+# tools — Day 36
+
+## Q1: How would you approach setting up a repeatable firmware build and release process for a medical device that uses Zephyr RTOS, where you need to produce auditable artifacts for regulatory purposes?
+
+**Answer:** For a medical device, the build process itself becomes part of the design history file, so reproducibility and traceability are paramount. I'd start by establishing a single source of truth for the build environment — this means version-pinning the Zephyr SDK, the toolchain (compiler, linker, etc.), and all dependencies, typically using a container or a dedicated build machine that's itself under version control. The west manifest file would pin exact revisions of Zephyr and all modules, not just branches or tags that can move.
+
+For the build itself, I'd use a CI system that triggers on tagged commits or merge requests, producing artifacts that include: the final binary with a computed checksum (SHA-256), the exact manifest and configuration files used (prj.conf, board defconfig, devicetree overlays), build logs, and a report of the git commit hash and any local modifications. These artifacts should be stored in a way that's immutable and access-controlled, with a naming convention that ties them to a specific release candidate.
+
+One important detail is making the build deterministic — this means disabling timestamp embedding where possible, or at least recording the build timestamp separately rather than embedding it in the binary in a way that would make two builds of the same source differ. I'd also configure the build to fail on warnings for critical modules, since a warning that's ignored today becomes a question in an audit tomorrow. Finally, I'd document the entire process in a standard operating procedure so that anyone on the team can reproduce the build and verify the artifacts match.
+
+**Possible follow-ups:** How would you handle a situation where a bug fix requires rebuilding with a different compiler version than what was originally used? What metadata would you embed in the firmware image itself to support field traceability?
+
+---
+
+## Q2: How would you approach using a mixed-signal oscilloscope to characterize the noise coupling between a switching regulator and a precision analog sensor on the same PCB, and how would you determine whether the coupling is conducted, radiated, or through the ground plane?
+
+**Answer:** This is a classic mixed-signal debugging scenario where the measurement setup is as important as the measurement itself. I'd start by establishing a clean trigger — using the switching node of the regulator as the trigger source, since that gives a stable time reference for the switching events. Then I'd simultaneously capture the regulator's output ripple, the analog sensor's supply pin, the sensor's output signal, and ideally the ground reference at both locations.
+
+To distinguish coupling mechanisms, I'd use a systematic approach. First, for conducted coupling: measure the noise at the sensor's supply pin while the regulator is switching, then insert a low-pass filter or ferrite bead in the supply path and see if the noise changes — if it does, it's conducted through the supply. For radiated coupling: use a near-field probe to sniff around the board while the system is running, looking for field strength near the sensor's traces or the analog front-end — if the probe picks up the switching frequency or its harmonics at the sensor location, radiation is a contributor. For ground-plane coupling: measure the voltage difference between the ground at the regulator and the ground at the sensor using a differential measurement — if there's a significant AC voltage between those two points, the ground plane itself is carrying switching currents.
+
+The key measurement technique is using a differential probe or a ground-spring on the oscilloscope probe rather than the long ground lead, which acts as an antenna and picks up radiated noise that isn't actually present at the measurement point. I'd also use the oscilloscope's FFT function to look at the frequency content of the noise — this helps identify whether it's the fundamental switching frequency, a harmonic, or something else entirely. Once I've identified the dominant coupling path, I can decide on mitigation: better decoupling for conducted, shielding or layout changes for radiated, or via stitching/ground plane improvements for ground coupling.
+
+**Possible follow-ups:** How would you set up the oscilloscope's acquisition mode (averaging, peak detect, high-resolution) to get the most useful data in this scenario? What if the noise only appears when the sensor is actively sampling — how would that change your approach?
+
+---
+
+## Q3: How would you approach setting up a hierarchical schematic design in Altium Designer for a complex mixed-signal medical device that has multiple identical sensor channels, and how would you ensure that design changes propagate correctly to all instances?
+
+**Answer:** Hierarchical design is the right approach when you have repeated blocks, and the key is to design the hierarchy so that changes propagate cleanly without unintended side effects. I'd start by identifying what's truly identical across the channels — for a medical sensor front-end, this might be the signal conditioning chain (amplifier, filter, ADC driver) but not necessarily the surrounding circuitry like decoupling or connector pin assignments.
+
+In Altium, I'd create a sheet symbol for the sensor front-end with clearly defined sheet entries for all the signals that cross the boundary: power rails, ground, the analog output, control signals, and any calibration or test points. The key is to be disciplined about what crosses the boundary — everything that enters or leaves the block must be an explicit sheet entry, and I'd avoid using global nets or power ports that bypass the hierarchy, because those create hidden dependencies that make changes unpredictable.
+
+For propagation of changes, Altium's multi-channel design feature is the right tool — when you place multiple sheet symbols pointing to the same child sheet, Altium handles the channel repetition and you can use the `Repeat()` function for bused signals. When you edit the child sheet, all instances update automatically. However, I'd be careful about component designators — Altium will automatically suffix them (e.g., U1A, U1B, U1C), and I'd verify that the annotation is set up correctly so that the BOM groups the repeated components properly.
+
+One thing I'd emphasize is the importance of design rules and ERC across the hierarchy — I'd run ERC on the top-level sheet to catch connectivity issues between blocks, and I'd verify that the net names are consistent across hierarchy boundaries. I'd also document the hierarchy structure itself, since a reviewer or a future engineer needs to understand the design intent, not just the connectivity.
+
+**Possible follow-ups:** How would you handle a situation where one channel needs a slightly different component value due to layout constraints? How would you verify that the multi-channel annotation is correct before generating the BOM?
+
+---
+
+## Q4: How would you approach setting up a component library management strategy in KiCad for a medical device project that needs to maintain strict revision control and regulatory traceability, given that KiCad's library format is file-based rather than database-driven?
+
+**Answer:** KiCad's file-based library format is actually well-suited to version control, but it requires more discipline than a database-driven system because there's no built-in locking or access control. I'd structure the libraries as a separate repository (or a clearly separated directory tree within the project repo) that follows a defined naming and revision convention.
+
+The key decision is how to organize symbols, footprints, and 3D models. I'd use a three-tier structure: vendor libraries (read-only, imported from manufacturers), a shared project library (curated, reviewed components), and a local working library (for components under development). The shared library is where approved components live, and changes to it go through the same review process as code changes — a merge request, review by a second engineer, and a clear commit message describing the change and its rationale.
+
+For traceability, each component should carry metadata that ties it to its source: manufacturer part number, datasheet revision, and a link to the datasheet or the approval record. KiCad's custom fields on symbols and footprints are the right place for this. I'd also maintain a component approval log — a simple document or spreadsheet that records when a component was added, who approved it, and what the approval was based on (datasheet review, previous use in a product, etc.).
+
+For revision control specifically, I'd use Git with meaningful commit messages and tags for release points. The critical discipline is that the schematic and PCB must reference library components by their unique identifier (the symbol name and footprint name), not by copy-pasting the symbol into the schematic — this way, when a library component is updated, you can track which designs are affected. I'd also run ERC and DRC with the library consistency checks enabled to catch cases where a schematic symbol and its footprint don't match the library definitions.
+
+**Possible follow-ups:** How would you handle a component that needs a footprint modification for a specific board, when the modification shouldn't affect other designs using the same component? How would you ensure that the library repository and the project repository stay in sync?
+
+---
+
+## Q5: (Behavioral) Imagine you are leading a design review for a medical device PCB, and you discover that the firmware team has been using a different version of the I2C protocol than what the hardware actually implements — the firmware is expecting 7-bit addressing with a specific register map, but the hardware uses 10-bit addressing with a different register layout. The integration testing is scheduled to start in two days, and both teams are confident their implementation is correct. How would you handle this situation?
+
+**Answer:** The first thing I'd do is stop the blame game before it starts — both teams are confident, which means the issue is likely a communication breakdown somewhere in the requirements flow, not a competence problem. I'd call an immediate joint meeting with both teams, but before that, I'd gather the actual evidence: the hardware schematic showing the address pins and the I2C controller configuration, the firmware source showing the address and register map being used, and any interface control document (ICD) or requirements specification that should have defined this interface.
+
+In the meeting, I'd present the discrepancy objectively — showing the hardware configuration and the firmware configuration side by side — and ask both teams to confirm what they're actually implementing, not what they think they're implementing. The goal is to establish the facts first, then decide on the fix. The decision of which side to change depends on several factors: which implementation is closer to the original requirements, which change is less risky (changing firmware is usually faster, but changing hardware might be necessary if the address pins are hard-wired), and which change has fewer downstream effects on other systems.
+
+With two days to integration testing, I'd be looking for the fastest safe path. If the hardware address pins are strapped and can't be changed without a board rework, then the firmware needs to be updated — that's a code change that can be done and tested in a day if the register map is well-documented. If the hardware can be reworked quickly (e.g., moving a solder jumper), that might be faster than rewriting firmware. I'd also check whether the register map difference is just an addressing issue or if the actual register contents differ — if the registers are different, that's a bigger problem than just the address.
+
+After the immediate fix, I'd initiate a root-cause analysis to understand how the requirements got misinterpreted — was the ICD unclear, was there a version mismatch between documents, or was there no ICD at all? I'd also implement a verification step for future integrations: a simple interface check (e.g., a loopback test or a register readback) that runs before full integration testing, so this class of issue is caught earlier. The key leadership point is to keep the team focused on solving the problem, not assigning blame — the goal is to get to a working system and then improve the process so it doesn't happen again.
+
+**Possible follow-ups:** How would you handle the situation if the firmware team insists their implementation is correct because it works on the evaluation board? What would you do if the hardware team says the address pins are correct per the datasheet, but the firmware team says the datasheet is wrong?
