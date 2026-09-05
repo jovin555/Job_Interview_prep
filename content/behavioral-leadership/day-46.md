@@ -1,0 +1,65 @@
+# behavioral-leadership — Day 46
+
+## Q1: How would you approach leading a technical investigation when a field-reported issue with a medical device could be caused by either a battery management system fault or a charging circuit problem, and the two possible causes would require very different corrective actions?
+
+**Answer:** I'd start by framing this as a structured root-cause investigation rather than a debate between two hypotheses. The first step would be containment — ensuring patient safety by identifying whether any immediate action is needed, such as a field advisory or usage restriction, while the investigation proceeds. Then I'd assemble a small cross-functional team including hardware, firmware, and possibly quality representation, and begin with a clear problem statement that captures the observed symptom without presupposing the cause.
+
+For the investigation itself, I'd use a fishbone diagram to map all potential contributing factors across categories — power path design, battery chemistry and age, charging algorithm, environmental conditions, and usage patterns. This prevents the team from tunnel-visioning on the two most obvious candidates. From there, I'd work through 5 Whys on the most plausible branches and, critically, gather data before making any design changes. That means pulling field-returned units if available, reviewing charge/discharge logs, and reproducing the failure under controlled conditions.
+
+The key discipline is separating containment from corrective action. A temporary fix might be a firmware workaround to limit charge current, but that's not the same as understanding the root cause. I'd also want to verify the effectiveness of any corrective action by subjecting the modified design to the same conditions that reproduced the original failure, plus margin testing. Finally, I'd document the entire investigation — evidence, analysis, decision rationale — in the design history file, because in a medical device context the investigation itself becomes part of the regulatory record.
+
+**Possible follow-ups:** How would you handle it if the two teams (battery vs. charging) each have strong opinions and are reluctant to share data that might implicate their subsystem? What level of evidence would you require before committing to a corrective action that delays the product's return to market?
+
+---
+
+## Q2: How would you approach building a technical leadership roadmap for a team that is transitioning from a single-product medical device focus to a multi-project portfolio, where engineers are used to deep specialization rather than cross-project flexibility?
+
+**Answer:** The core challenge here is shifting from a "one team, one product" mindset to a model where engineers need to contribute across multiple projects without losing the depth that made them effective in the first place. I'd start by mapping the technical skills required across the portfolio and identifying where there's genuine overlap versus where specialization is truly necessary. Not everything needs to be cross-trained — some areas, like regulatory compliance knowledge or safety-critical design expertise, may need to remain concentrated.
+
+I'd then structure the roadmap around three dimensions: skill development, project staffing, and knowledge sharing. For skill development, I'd identify adjacent skills that enable flexibility — for example, an engineer who deeply understands analog sensor design could broaden into power management, since both draw on similar fundamentals. For project staffing, I'd deliberately assign engineers to secondary projects in roles that stretch them without overwhelming them, perhaps pairing a specialist with a more generalist engineer on a new project. For knowledge sharing, I'd establish lightweight mechanisms — design guidelines, reusable component libraries, lessons-learned reviews — so that expertise isn't locked in individuals' heads.
+
+A critical piece is being honest about the transition cost. Engineers can't become multi-project contributors overnight, and forcing it too quickly will degrade quality. I'd phase the transition, perhaps starting with one shared resource across two projects, then expanding as processes and documentation mature. I'd also watch for signs of burnout or quality erosion and adjust the pace accordingly. Finally, I'd make sure the roadmap includes explicit career development conversations — some engineers may not want to become generalists, and that's a legitimate preference that needs to be respected in how projects are staffed.
+
+**Possible follow-ups:** How would you identify which engineers are best suited to become cross-project contributors versus those who should remain deep specialists? How would you measure whether the transition is actually improving portfolio throughput without sacrificing quality?
+
+---
+
+## Q3: How would you approach designing a test strategy for a battery-powered medical sensor device where the firmware team wants to add a new low-power sleep mode that significantly extends battery life, but the hardware team is concerned about the mode's effect on analog sensor stability during wake-up transitions?
+
+**Answer:** I'd approach this as a risk-balancing problem that needs a test strategy capable of exposing the specific failure modes both teams are worried about. The firmware team's concern is battery life — so the test strategy needs to verify that the sleep mode actually achieves the predicted power consumption across realistic usage patterns, not just in an ideal lab scenario. The hardware team's concern is analog stability — so the strategy needs to characterize what happens to sensor readings during the wake-up transient, including settling time, offset drift, and any glitches that could corrupt a measurement.
+
+I'd start by defining the acceptance criteria jointly: what does "stable" mean for the sensor output within what time window after wake-up, and what is the minimum acceptable battery life across the device's duty cycle? These criteria need to be agreed upon before testing begins, otherwise each team will interpret results differently. Then I'd design a test matrix that covers the corners both teams care about — worst-case temperature, battery voltage at end of life, varying sleep durations, and repeated wake cycles to catch cumulative effects.
+
+A key technique would be instrumenting the device to capture both domains simultaneously: logging power rail behavior and sensor output on the same time base during wake-up transitions. This lets the team correlate any sensor anomaly with a specific power event rather than arguing about whether the problem is in firmware timing or hardware settling. I'd also include a soak test — many wake-up-related issues only appear after thousands of cycles, so a short test might miss them entirely.
+
+Finally, I'd make sure the test results feed back into a decision framework. If the sleep mode works but requires slightly longer settling time before the first valid sensor reading, that might be acceptable if the firmware can accommodate it. The test strategy should generate data that supports a trade-off discussion, not just a pass/fail verdict.
+
+**Possible follow-ups:** How would you handle it if the test results show that the sleep mode meets battery life targets but causes marginal sensor instability that only appears under specific temperature conditions? What additional tests would you run to characterize the boundary of acceptable performance?
+
+---
+
+## Q4: How would you approach leading a technical review of a proposed architecture for a new medical device where the system architect has chosen a modular design with multiple microcontrollers communicating over CAN-FD, but several senior engineers believe a single high-performance processor would be simpler and more reliable?
+
+**Answer:** I'd structure this as a decision review rather than a debate, which means the goal is to reach a well-documented, defensible decision — not to declare a winner. The first step is to make sure both positions are fully articulated with their underlying assumptions made explicit. The modular design likely offers benefits like fault isolation, independent development streams, and potentially easier certification of safety-critical functions. The single-processor approach likely offers benefits like simpler inter-processor communication, lower bill of materials cost, and fewer potential points of failure.
+
+I'd ask each side to present their case against explicit criteria rather than general preferences. Relevant criteria for a medical device might include: reliability and failure modes, development risk, compliance burden, serviceability, power consumption, and long-term maintainability. I'd also want to see data where possible — for example, the architect's analysis of CAN-FD bus loading under worst-case traffic, or the opposing team's assessment of whether a single processor can meet real-time requirements while running all necessary tasks.
+
+A useful technique is to separate the discussion into "facts we know" versus "assumptions we're making." For instance, we might know the processing load from similar devices, but we might be assuming that a single processor can handle it without priority inversion issues. Identifying these assumptions helps focus the discussion on what's actually uncertain. If the disagreement persists after a thorough technical exchange, I'd consider whether a prototyping exercise could resolve the key unknown — perhaps a breadboard test of the CAN-FD network under realistic traffic, or a benchmark of the single-processor approach under worst-case load.
+
+Regardless of the outcome, I'd document the decision with its rationale, including the alternatives considered and why they were rejected. In a medical device context, this traceability is essential — a future auditor or engineer needs to understand why this architecture was chosen. I'd also make sure the decision is framed as provisional pending design verification, so the team understands that new evidence during development can reopen the question.
+
+**Possible follow-ups:** How would you handle it if the disagreement is partly political — for example, the architect is a senior person whose reputation is tied to the modular design? What specific technical evidence would you require before overturning the architect's recommendation?
+
+---
+
+## Q5: How would you approach building a culture where engineers feel comfortable raising concerns about a design decision early, even when the decision was made by a senior person or a consensus of the team, and even when the concern is based on a "gut feeling" rather than a fully articulated technical argument?
+
+**Answer:** This is fundamentally about psychological safety and the norms of technical discourse. I'd start by modeling the behavior myself — explicitly inviting challenge on my own decisions and responding to concerns with curiosity rather than defensiveness. When someone raises a concern, even a vague one, the response should be "help me understand what's bothering you about this" rather than "what's your evidence?" This signals that concerns are welcome even when they're not fully formed.
+
+I'd also work to separate the idea from the person. In design reviews, I'd frame discussions around "this design has a potential issue" rather than "you made a mistake." This might involve using structured critique techniques where reviewers are asked to identify risks and uncertainties rather than pass judgment. I'd also make it clear that raising a concern that turns out to be unfounded is not a cost — it's a normal part of the process, and the team should thank people for raising issues regardless of whether they lead to changes.
+
+A practical mechanism is to create multiple channels for raising concerns. Some engineers are comfortable speaking up in a group setting; others are not. I'd ensure there are alternatives — one-on-one conversations, anonymous channels, or written comments on design documents. The goal is to remove the social risk of speaking up, not to force everyone to do it in the same way.
+
+Finally, I'd track how concerns are handled and close the loop. If someone raises a concern and the team decides not to act on it, that decision needs to be communicated back with the rationale. Otherwise, people will stop raising concerns because they feel unheard. Over time, the culture shifts when engineers see that raising a concern leads to a thoughtful response — not necessarily agreement, but genuine consideration.
+
+**Possible follow-ups:** How would you handle a situation where a junior engineer raises a concern that is technically incorrect, and a senior engineer responds dismissively in a way that discourages future participation? What would you do if you notice that the same two or three people are the only ones ever raising concerns, while others remain silent?
