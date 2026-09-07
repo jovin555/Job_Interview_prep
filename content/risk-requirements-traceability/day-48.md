@@ -1,0 +1,79 @@
+# risk-requirements-traceability — Day 48
+
+## Q1: How would you approach establishing traceability for a risk control measure that is implemented as a hardware watchdog timer monitoring a firmware heartbeat, when the hardware and firmware teams each document their portions in separate specifications with no cross-references?
+
+**Answer:** This is a classic split-ownership problem where the risk control only exists at the intersection of two disciplines. I'd start by treating the watchdog-heartbeat pair as a single integrated risk control in the risk management file, even though it spans two design artifacts. The key is to create an explicit "integration point" in the traceability scheme rather than trying to force each team to document the other's work.
+
+First, I'd define the control's system-level intent clearly: "The system shall detect firmware execution failure and reset within X ms." This becomes the anchor requirement in the SRS. From there, I'd work with each team to identify their portion: the hardware team owns the watchdog timer's timeout period, reset assertion, and the physical connection to the MCU's reset pin; the firmware team owns the heartbeat generation, the task that kicks the watchdog, and the behavior during normal vs. degraded operation.
+
+For the traceability artifacts, I'd add cross-reference fields to both specifications. The hardware spec gets a note like "This watchdog circuit implements the hardware portion of risk control RC-014; see FW-SRS-3.2 for the firmware heartbeat requirement." The firmware spec gets the mirror reference. Neither team needs to fully document the other's work — they just need to point to it. The risk management file then traces RC-014 to both the hardware requirement and the firmware requirement, plus to the system-level integration test that exercises the complete chain.
+
+The verification strategy is where the integration really matters. You need three levels: a hardware test that the watchdog resets the MCU when the heartbeat stops (which requires a firmware test hook to stop the heartbeat), a firmware test that the heartbeat is generated correctly under normal operation, and a system-level test that introduces a controlled firmware fault and confirms the reset occurs within the specified time. The system-level test is the one that truly validates the risk control, because it exercises the complete hardware-firmware interaction.
+
+**Possible follow-ups:** How would you handle the case where the hardware and firmware teams use different numbering schemes for their requirements? What if the firmware team changes the heartbeat period during development — how would you ensure the hardware watchdog timeout still provides adequate margin?
+
+---
+
+## Q2: How would you approach determining whether a requirement in the SRS is truly a "safety requirement" derived from risk management, versus a "performance requirement" that exists for functional reasons, and how would you decide which traceability links are necessary for each type?
+
+**Answer:** The distinction matters because safety requirements demand rigorous bidirectional traceability to risk controls and verification, while performance requirements need lighter-weight tracing to design and test. I'd use a systematic classification approach rather than relying on individual judgment.
+
+The primary test is whether the requirement exists to mitigate an identified hazard. If you can trace the requirement back to a specific hazard in the risk management file — and removing or weakening the requirement would increase the severity or likelihood of that hazard — it's a safety requirement. For example, "the device shall shut down the motor within 100ms of detecting over-temperature" is a safety requirement because it directly implements a risk control for a thermal hazard. In contrast, "the device shall display battery level with ±5% accuracy" is a performance requirement — it affects usability but doesn't mitigate a specific hazard.
+
+I'd also look at the requirement's origin. Requirements that emerge from the risk analysis process — where the team explicitly considered risk control options and selected a particular approach — are almost always safety requirements. Requirements that come from customer needs, marketing input, or engineering judgment about good design are typically performance requirements.
+
+For the traceability scheme, safety requirements need the full chain: hazard → risk control measure → safety requirement → design element → verification test. They also need to appear in the DFMEA or FMEA as controls that reduce severity or occurrence. Performance requirements need a lighter chain: requirement → design element → verification test. They don't need to link back to the risk management file.
+
+One nuance: some requirements are dual-purpose. A motor speed limit might exist both for performance (smooth operation) and safety (preventing mechanical hazard). In that case, I'd classify it as a safety requirement and add the full traceability, while noting the performance rationale in the requirement's rationale field. It's better to over-classify borderline cases as safety requirements than to under-classify them, because the consequence of missing a safety link is much worse than the overhead of an extra trace.
+
+**Possible follow-ups:** How would you handle a requirement that was originally written as a performance requirement but later becomes a risk control when a hazard is identified late in development? What criteria would you use to decide whether a requirement that supports a safety function but doesn't directly mitigate a hazard — like a power supply requirement — needs full safety traceability?
+
+---
+
+## Q3: How would you approach creating a traceability scheme that captures the evolution of risk control measures and their associated requirements across multiple design iterations, given that both the risk analysis and the requirements specification are living documents?
+
+**Answer:** This is fundamentally a configuration management problem. The traceability scheme needs to handle not just the current state of links, but also the history of how those links changed — because a reviewer or auditor needs to understand why a particular risk control evolved from one implementation to another.
+
+I'd establish a baseline-and-change approach. At key milestones — typically after design reviews or before verification campaigns — the team freezes a baseline of the risk management file, the SRS, and the traceability matrix. Each baseline gets a version number and a date. Between baselines, changes are tracked as proposed modifications with a change control record that captures: what changed, why it changed, who approved it, and what impact it has on other artifacts.
+
+For the traceability matrix itself, I'd add fields for "valid from baseline" and "valid to baseline" on each link. When a risk control changes — say, a hardware comparator is replaced by a firmware-based detection algorithm — the old link is closed with an end date, and a new link is opened. The matrix preserves the history rather than overwriting it. This way, if someone asks "how was this hazard mitigated in the version that went through the first verification campaign?" you can reconstruct the answer.
+
+The change impact analysis is critical. When a risk control changes, I'd trace forward to see which requirements, design elements, and verification tests are affected, and trace backward to confirm the hazard is still adequately mitigated. This analysis should be documented as part of the change record. For example, if the team decides to change a watchdog timeout from 200ms to 500ms, the impact analysis must confirm that the hazard being mitigated still has acceptable residual risk with the longer timeout, and that the verification test criteria are updated accordingly.
+
+I'd also maintain a revision history section in the risk management file that summarizes significant changes to risk controls — not every minor edit, but substantive changes to the control strategy. This gives reviewers a narrative of how the safety approach evolved, which is often more useful than digging through individual change records.
+
+**Possible follow-ups:** How would you handle a situation where a design change is made informally — for example, a firmware engineer changes a timeout value during debugging — and the traceability documents aren't updated until much later? How would you verify that the baseline used for a verification campaign actually matches the design that was tested?
+
+---
+
+## Q4: How would you approach verifying that a risk control measure implemented as a firmware-based state machine — for example, preventing transition from "standby" to "active" unless all sensor self-tests pass — is correctly traced through to the system-level hazard it mitigates, and that the verification test adequately covers the failure scenario?
+
+**Answer:** Firmware state machine controls are interesting because the risk control is fundamentally about preventing a sequence of events, not just detecting a single fault condition. The verification needs to prove both that the guard works (the transition is blocked when self-tests fail) and that the guard can't be bypassed through unexpected state sequences.
+
+First, I'd confirm the traceability chain: the hazard (e.g., device activates with a faulty sensor, leading to incorrect therapy delivery) → the risk control (state machine guard preventing activation without passing self-tests) → the firmware requirement (explicitly stating the transition condition) → the verification test. The firmware requirement needs to be written in a way that captures the safety intent, not just the implementation. Something like "The system shall not transition from standby to active unless all sensor self-tests have passed within the current power-on session" — this makes the safety purpose clear and testable.
+
+For the verification strategy, I'd design tests at multiple levels. At the unit level, I'd test the state machine logic directly — injecting self-test pass/fail conditions and confirming the transition is allowed or blocked as specified. This is where you can exhaustively test all state transitions and input combinations. At the integration level, I'd test on the target hardware with real sensors — including a simulated sensor fault — to confirm the firmware correctly interprets the self-test results and enforces the guard. At the system level, I'd run the full startup sequence and attempt to enter active mode with a deliberately faulty sensor, confirming the device remains in standby and alerts the user.
+
+The critical question is whether the verification adequately covers the failure scenario. I'd look for three specific gaps. First, does the test actually simulate a realistic sensor fault, or does it just force the self-test to return a failure code? A test that injects a failure at the software interface might miss problems in the sensor interface or signal conditioning. Second, does the test attempt to bypass the guard through unexpected sequences — like rapid power cycling, or sending a "transition to active" command while a self-test is still running? Third, does the test confirm the device fails safe — meaning it stays in standby rather than entering an undefined state?
+
+I'd also consider whether the state machine needs to be verified on the actual production hardware or whether host-based testing is sufficient. For pure logic — the transition conditions and state enumeration — host-based testing can be adequate. But if the state machine interacts with timing, interrupts, or hardware peripherals, you need target hardware testing to confirm the behavior under real conditions.
+
+**Possible follow-ups:** How would you handle a situation where the state machine has a "maintenance mode" that bypasses the self-test guard, and the risk analysis hasn't considered whether maintenance mode could be accidentally entered during normal operation? What if the self-test itself can fail in a way that leaves the system in an undefined state — how would you verify the system handles that gracefully?
+
+---
+
+## Q5: (Behavioral) Imagine you're leading a project where the systems engineer has created a comprehensive requirements traceability matrix linking every requirement to a risk control measure and a verification test. However, during a design review, the test lead points out that several verification tests are testing the wrong thing — for example, a test labeled "verifies overcurrent protection" is actually testing nominal current draw. The systems engineer insists the traceability matrix is correct because the requirement numbers match. How would you resolve this disagreement?
+
+**Answer:** This is a situation where the traceability artifacts look correct on paper but don't reflect reality — which is arguably worse than having no traceability at all, because it creates false confidence. The systems engineer is technically right that the requirement numbers match, but the traceability matrix is only meaningful if the verification activity actually exercises the requirement's acceptance criteria.
+
+I'd start by acknowledging the systems engineer's point: the matrix is internally consistent, and the requirement-to-test links are correctly recorded. But I'd reframe the issue: traceability is a means to an end, not the end itself. The purpose of linking a risk control to a verification test is to provide objective evidence that the control works. If the test doesn't stress the failure condition, it provides no such evidence — regardless of whether the requirement numbers align.
+
+To resolve this, I'd call a meeting with the systems engineer, the test lead, and the quality manager to review the specific tests in question. For each disputed test, I'd ask three questions: What is the risk control supposed to do? What failure condition is it meant to mitigate? Does the test actually create that failure condition and confirm the control responds correctly? In the overcurrent example, the test lead should be able to show that the test applies a nominal load and measures steady-state current — which verifies the circuit works under normal conditions but says nothing about whether the protection trips at the specified threshold.
+
+Once we've identified the gaps, I'd work with the team to determine the fix. In some cases, the test procedure needs to be corrected — adding a fault injection step that forces an overcurrent condition. In other cases, the test may need to be supplemented with an additional test that exercises the protection function. The key is to update both the test procedure and the traceability matrix so they reflect reality.
+
+I'd also use this as an opportunity to improve the verification planning process. The root cause is likely that tests were written from the requirement text rather than from an analysis of the failure condition. I'd suggest that when a test is written for a risk control, the test author should explicitly document: the hazard being mitigated, the failure condition being simulated, and how the test creates that condition. This forces the test author to think about whether the test actually stresses the control, rather than just checking a box.
+
+Finally, I'd make sure the resolution is documented — not just the corrected tests, but the discussion and rationale. This creates a record that the team recognized the gap and addressed it, which is valuable for both internal learning and regulatory review.
+
+**Possible follow-ups:** How would you handle a situation where the test lead discovers the discrepancy late in the verification campaign, and correcting the tests would delay the project schedule? What process changes would you propose to prevent this type of gap from occurring in future projects?
