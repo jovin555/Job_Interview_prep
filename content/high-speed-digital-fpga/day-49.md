@@ -1,0 +1,79 @@
+# high-speed-digital-fpga — Day 49
+
+## Q1: How would you approach implementing a high-speed data path in an FPGA where the input data rate is 12.5 Gbps and the fabric clock is limited to 400 MHz, requiring significant serial-to-parallel conversion and processing?
+
+**Answer:** The first step is recognizing that 12.5 Gbps cannot be handled directly in the FPGA fabric—this requires the dedicated high-speed transceivers. The transceiver's serializer/deserializer (SERDES) will handle the gearboxing from the serial domain to a parallel word width that the fabric can manage. At 12.5 Gbps, the transceiver typically provides a parallel interface width that keeps the fabric-side clock at or below 400 MHz. For example, a 32-bit or 64-bit datapath at 390.625 MHz or 195.3125 MHz respectively would be typical.
+
+The key architectural decision is where to place the clock domain crossing and how to structure the processing pipeline. I would use the transceiver's internal PLL to generate the recovered clock from the incoming data, then use the FPGA's clock management tiles to generate the fabric clock from the reference clock. The transceiver's parallel interface should be treated as a synchronous domain—the data is valid on the rising edge of the transceiver's output clock, and the FPGA logic should register directly off that clock.
+
+For the processing path itself, I would pipeline aggressively. At these rates, you cannot afford combinational logic depth that creates timing violations. The processing should be broken into stages, each registered, with careful attention to resource placement—DSP slices and block RAMs have dedicated routing that can help meet timing. I would also consider whether the processing can be done in parallel lanes. For instance, if the algorithm processes data in a streaming fashion, you might split the incoming word into multiple parallel processing chains that operate on interleaved samples, then recombine at the output.
+
+For verification, I would simulate the full path including the transceiver model, and pay particular attention to the reset sequence—transceivers have specific reset requirements that must be followed to achieve reliable lock. I would also verify the alignment logic, since the incoming serial stream needs word alignment to establish the correct byte boundaries.
+
+**Possible follow-ups:** How would you handle the case where the processing algorithm requires feedback from one output sample to the next, preventing simple parallelization? What are the trade-offs between using a wider parallel bus at a lower clock versus a narrower bus at a higher clock?
+
+---
+
+## Q2: How would you approach debugging an FPGA design where the configuration bitstream loads successfully, but the design's internal state machine appears to be stuck in an illegal state only when a specific external input sequence occurs, and the issue is not reproducible in RTL simulation?
+
+**Answer:** This is a classic case where the problem likely lies in a mismatch between what the RTL simulation models and what actually happens in hardware. The first step is to determine whether the state machine is truly in an illegal state or whether it's stuck in a legal state that isn't progressing. I would use the FPGA's integrated logic analyzer to capture the state register values and the relevant input signals around the time of the failure.
+
+If the state machine is in an illegal state, the most likely causes are: uninitialized state registers, missing default cases in the state transition logic, or a clock domain crossing issue where an asynchronous input corrupts the state. Since the issue only occurs with a specific input sequence, I would examine whether that sequence creates a timing hazard—for example, if two input signals change simultaneously and the state machine samples them at a boundary, a race condition could occur.
+
+The fact that it's not reproducible in RTL simulation suggests either the simulation stimulus doesn't capture the exact timing of the real inputs, or the simulation is missing a real-world effect like metastability, glitches on input signals, or asynchronous assertion of control signals. I would add assertions to the RTL to detect illegal state transitions and run longer simulations with more realistic input timing, including skew between related signals.
+
+In hardware, I would use the logic analyzer to capture a window of data around the failure, then replay that exact sequence in simulation. If the issue still doesn't reproduce, I would examine the synthesis and implementation reports for any warnings about the state machine—for example, if the synthesizer optimized away a state transition or if there are unreachable states that were removed. I would also check whether the state encoding is one-hot or binary, and whether the synthesis tool correctly preserved the intended behavior.
+
+Another important check is the reset behavior. If the state machine relies on a synchronous reset that isn't asserted cleanly, or if the reset deassertion is asynchronous relative to the clock, the state machine could start in an unknown state. I would verify that the reset is properly synchronized and that all state registers have a defined initial value.
+
+**Possible follow-ups:** How would you use formal verification techniques to prove that the state machine cannot reach an illegal state? What role would clock domain crossing analysis play in your investigation?
+
+---
+
+## Q3: How would you approach designing a finite state machine (FSM) in an FPGA that must control a high-speed data path with strict latency requirements (e.g., a packet processor that must make a forwarding decision within 5 clock cycles at 400 MHz), while also being robust against single-event upsets (SEUs)?
+
+**Answer:** This problem has two competing requirements: minimal latency and SEU robustness. The latency constraint means we cannot add extensive error detection and recovery logic that would require multiple cycles. The SEU robustness requirement means we need to detect and recover from state corruption, but the recovery path can be slower than the normal operating path—it just needs to be safe.
+
+For the FSM architecture itself, I would use a one-hot encoding rather than binary encoding. One-hot has the advantage that a single-bit upset in the state register produces either another valid state (if the upset moves the '1' to a different bit) or an all-zeros state (if the upset clears the '1'). With binary encoding, a single-bit upset can produce any state, including states that are far from the current state in the state diagram, making error detection much harder.
+
+For SEU detection, I would add a parity bit or use a Hamming code over the state register. A single parity bit can detect any odd number of bit flips, which covers the most common single-event upsets. The parity check can be computed combinationally, so it adds minimal latency to the critical path. When an error is detected, the FSM transitions to a safe state—typically an idle or reset state—rather than attempting to recover the exact previous state. This recovery path can take multiple cycles since it only occurs on error.
+
+For the state transition logic itself, I would ensure that every state has defined transitions for all possible input combinations, including a default transition to a safe state for any undefined condition. This prevents the FSM from getting stuck in an illegal state. I would also consider using triple modular redundancy (TMR) for the most critical states, but given the latency constraint, this might not be feasible for the entire FSM. A pragmatic approach is to use TMR only for the state register itself, with a voter that selects the majority value. This adds one cycle of latency for the voting, which may or may not fit within the 5-cycle budget.
+
+For the data path control signals, I would make the FSM outputs registered rather than combinational. This adds one cycle of latency but ensures that glitches on the state transition logic don't propagate to the data path. The registered outputs also make the design more robust against SEUs in the combinational logic, since a transient glitch on the output logic would need to persist until the next clock edge to be captured.
+
+**Possible follow-ups:** How would you verify that the SEU detection logic itself is robust against upsets? What is the trade-off between using a parity check versus full TMR for the state register?
+
+---
+
+## Q4: How would you approach designing a clock domain crossing (CDC) scheme for a data bus where the source and destination clocks are asynchronous, the data changes frequently, and you need to minimize latency while ensuring data integrity?
+
+**Answer:** This is the fundamental CDC problem: transferring multi-bit data between asynchronous clock domains with minimal latency and no data corruption. The first decision is whether the data is a continuous stream or a discrete packet. For continuous streaming data, an asynchronous FIFO is the standard solution. For discrete transfers where the data is valid for a specific window, a handshake-based approach or a Gray-coded pointer scheme might be more appropriate.
+
+For an asynchronous FIFO, the key design elements are: the FIFO memory (typically block RAM or distributed RAM), the write pointer and read pointer, and the synchronization logic for crossing the pointers between domains. The write pointer is generated in the write clock domain and must be synchronized to the read clock domain to determine the FIFO's empty/full status, and vice versa. The critical design aspect is using Gray code for the pointers so that only one bit changes at a time during the synchronization, preventing metastability from causing incorrect pointer values.
+
+The latency in an asynchronous FIFO comes from two sources: the synchronization delay (typically 2-3 cycles in each direction for the pointer crossing) and the FIFO's internal latency. To minimize latency, I would use a first-word fall-through (FWFT) FIFO, where the first word written becomes available on the read side without requiring a read operation to push it through. This reduces the read-side latency to essentially one cycle.
+
+If the data transfers are discrete rather than continuous, a handshake-based approach might have lower latency for individual transfers. The classic 4-phase handshake (request-acknowledge-request-deassert-acknowledge-deassert) is robust but slow. A 2-phase handshake (where each transition of the request line indicates a new data item) has lower latency but is more complex to implement correctly. For multi-bit data, the handshake must ensure that the data is stable before the request is asserted, and that the receiving domain captures the data before the request is deasserted.
+
+An alternative approach for minimizing latency is to use a MUX-based synchronizer with a "valid" signal. The source domain asserts a valid signal along with the data. The destination domain synchronizes the valid signal (2-3 flip-flops), and when the synchronized valid is high, it captures the data. The risk here is that if the data changes while the valid signal is being synchronized, the destination might capture data that is transitioning. To avoid this, the source must hold the data stable until the destination has acknowledged receipt, which adds latency.
+
+For the lowest possible latency, I would consider whether the clocks have any known relationship. If they are derived from the same reference but with different multipliers/dividers, there might be a known phase relationship that allows for deterministic transfers. If the clocks are truly asynchronous, there is no way to guarantee zero-latency transfers without risking data corruption—the synchronization delay is fundamental to avoiding metastability.
+
+**Possible follow-ups:** How would you determine the required depth of the asynchronous FIFO for your application? How would you verify that the CDC scheme is correct using simulation or formal methods?
+
+---
+
+## Q5: Behavioral question — You're leading a design review for a high-speed FPGA-based data acquisition board. A junior engineer on your team has implemented the data path that captures samples from a 500 MSPS ADC and writes them to DDR3 memory. During the review, you notice that the engineer has used a single FIFO to cross from the ADC clock domain to the memory controller clock domain, but the FIFO depth is only 64 words. When you ask about the depth, the engineer explains that the average write rate is well below the read rate, so the FIFO should never overflow. However, you're concerned about burst behavior — the ADC can produce bursts of data that could temporarily exceed the memory controller's sustainable write rate. The engineer argues that the memory controller's write buffer will absorb the bursts. How do you handle this situation?
+
+**Answer:** This is a situation where I need to address both the technical concern and the junior engineer's understanding of the system architecture. The engineer's reasoning about average rates is correct in steady-state, but it misses the critical distinction between average throughput and instantaneous burst handling. The FIFO depth must be sized based on the worst-case burst scenario, not the average rate.
+
+My approach would be to first acknowledge what the engineer got right—they correctly identified that the average write rate is below the read rate, which is necessary for the system to work at all. Then I would walk through the burst scenario together. I would ask the engineer to calculate the worst-case burst: if the ADC produces a continuous stream of samples for, say, 1000 clock cycles at 500 MSPS, how many words would accumulate in the FIFO before the memory controller can drain them? The memory controller has its own latency—it needs to schedule refresh cycles, handle bank conflicts, and manage the write-to-read turnaround time. The controller's write buffer might absorb some of the burst, but it's not infinite, and it's shared with other traffic.
+
+I would also point out that the FIFO depth isn't just about preventing overflow—it's also about preventing underflow on the read side. If the FIFO is too shallow, the memory controller might find the FIFO empty when it's ready to read, wasting bandwidth and potentially causing the ADC data to be lost if the system can't pause the ADC.
+
+Rather than just telling the engineer the FIFO is too small, I would work through the calculation together. We would determine the maximum burst duration from the ADC, the memory controller's sustainable write rate (accounting for refresh overhead and bank conflicts), and then calculate the required FIFO depth with margin. I would also discuss the system-level implications: what happens when the FIFO does overflow? Is there a backpressure mechanism to pause the ADC? Is data loss acceptable, or does the system need to detect and flag overflow events?
+
+If the engineer still disagrees after the technical discussion, I would suggest we verify the behavior through simulation. We could create a testbench that models the ADC burst pattern and the memory controller's response, and measure the FIFO occupancy over time. This would provide concrete evidence for the required depth. I would frame this as a learning opportunity rather than a criticism—the goal is to help the engineer develop the right mental model for burst handling in data acquisition systems.
+
+**Possible follow-ups:** How would you handle the situation if the engineer's simulation showed that the 64-word FIFO was actually sufficient for the expected burst patterns? What design changes would you consider if the required FIFO depth exceeded the available block RAM resources?
