@@ -1,0 +1,87 @@
+# hardware-design — Day 50
+
+## Q1: How would you approach designing the power supply architecture for a medical device that contains a high-resolution analog front-end (requiring a noise floor below 50 µV RMS) and a motor driver that can draw 1A peaks?
+
+**Answer:** The fundamental challenge here is that you have two loads with directly conflicting requirements — the analog front-end needs a clean, low-noise supply while the motor driver creates large current transients that can couple noise back into the shared power rail. I would start by separating the power domains physically and electrically rather than trying to make a single rail serve both.
+
+The architecture would use a central battery or input supply feeding two independent paths. The motor driver gets its own supply path with bulk capacitance sized for the 1A peaks — this keeps the high di/dt currents contained in a loop that doesn't include the analog circuitry. The analog front-end gets a dedicated low-noise LDO, fed from the main rail through a pi-filter (ferrite bead plus capacitors) to attenuate switching noise and transient coupling.
+
+The key design decisions are: first, where to place the ground split or partitioning — I'd use a solid ground plane with careful component placement rather than a split plane, since split planes create return-path discontinuities that often cause more problems than they solve. Second, the LDO selection — I'd look for one with good PSRR at the frequencies of concern, particularly at the motor driver's commutation frequency and its harmonics. Third, the physical layout — the motor driver's high-current loop must be kept short and away from the analog section, and the analog front-end's reference and ground connections must not share return paths with the motor current.
+
+I would also consider whether the motor needs to run simultaneously with precision measurements. If the system can schedule motor actuation during periods when the analog front-end isn't sampling critical data, that creates a much simpler design problem — but if they must operate concurrently, the isolation between domains becomes the critical design driver. In that case, I might consider a more aggressive approach like a shielded analog sub-circuit or even galvanic isolation if the architecture allows it.
+
+**Possible follow-ups:** How would you verify that the noise floor requirement is actually met once the board is built? What if the motor driver's switching frequency falls within the analog front-end's measurement bandwidth?
+
+---
+
+## Q2: How would you approach debugging a circuit where a precision analog front-end's output shows a periodic disturbance at approximately 1–10 Hz, even when the input is shorted to ground, and the disturbance amplitude varies with the power supply voltage?
+
+**Answer:** A low-frequency periodic disturbance that persists with the input shorted tells me the noise is being injected somewhere in the signal chain itself, not from the signal source. The fact that amplitude scales with supply voltage is a strong clue — it suggests the disturbance is coupled through the power supply path rather than through the input.
+
+My first step would be to characterize the disturbance precisely. I'd capture it on an oscilloscope with sufficient timebase to see several cycles, and also look at it in the frequency domain with an FFT. The 1–10 Hz range is interesting because it's too slow for most switching regulators (which typically run at 100 kHz–2 MHz) but could point to a few specific culprits.
+
+The most likely candidates, in order of probability: first, a thermal oscillation — if a component is dissipating power and its characteristics drift with temperature, you can get a low-frequency feedback loop. A voltage reference or op-amp that's marginally stable thermally can produce exactly this symptom. Second, a reference source that's being modulated by a low-frequency load — if something on the board draws current periodically (like an LED driver or a sensor excitation that cycles), it can modulate the supply voltage, and if the analog front-end's PSRR is insufficient at that frequency, you'll see it at the output. Third, a ground loop or thermocouple effect — if there's a temperature gradient across the board, dissimilar metal junctions in the signal path can generate low-frequency voltages that track the thermal time constant of the board.
+
+I'd approach this systematically. First, I'd power the analog front-end from a clean bench supply instead of the board's regulator — if the disturbance disappears, it's a supply-related issue. Second, I'd probe the supply rail itself at the analog front-end's power pin while the disturbance is occurring — if you see the same periodic variation on the rail, you've found the coupling path. Third, I'd check for any periodic load on the board that correlates with the disturbance — an LED, a sensor excitation, or even a microcontroller waking periodically. Fourth, I'd look at the reference voltage — if the disturbance appears on the reference, that's your smoking gun.
+
+If the disturbance is thermal in origin, you'd see it change with board temperature or airflow. If it's a periodic load, you'd see it correlate with whatever is cycling. The key is to isolate the coupling path — input, supply, reference, or ground — before changing any components.
+
+**Possible follow-ups:** What if the disturbance disappears when you power the board from a bench supply but the bench supply is actually noisier than the board's regulator? How would you distinguish between a supply-origin problem and a load-modulation problem?
+
+---
+
+## Q3: How would you approach selecting between a SAR ADC and a sigma-delta ADC for a medical device that measures a slowly varying physiological signal (e.g., temperature or pressure) with high resolution, and what are the key trade-offs you'd consider?
+
+**Answer:** For a slowly varying physiological signal, both architectures can work, but the right choice depends on the specific requirements around resolution, power, latency, and the nature of the signal itself.
+
+Sigma-delta ADCs are often the natural choice for this type of measurement. They achieve very high resolution through oversampling and noise shaping — you can get 16–24 bits of effective resolution relatively easily. They have excellent inherent anti-aliasing because the modulator runs at a high frequency and the digital decimation filter provides sharp roll-off. For a signal like temperature or pressure that changes slowly, the latency introduced by the decimation filter is usually irrelevant. The main drawbacks are: higher power consumption than a SAR ADC at the same sample rate (though for a slow signal you can duty-cycle the converter), and the fact that the digital filter's settling time means you can't get an accurate reading immediately after power-up or after changing channels.
+
+SAR ADCs offer lower power, faster conversion, and no latency — you get a sample immediately when you trigger the conversion. They're also simpler to interface with a multiplexer if you have multiple channels. However, achieving 16+ bits of effective resolution with a SAR ADC requires a very clean analog front-end, careful layout, and a low-noise reference. The anti-aliasing filter must be analog and becomes more critical as you push resolution higher.
+
+For a medical device, I'd also consider the system-level implications. If the measurement is safety-critical and needs to be available immediately on power-up, a SAR ADC's lack of settling time is an advantage. If the signal is very low amplitude and you need maximum resolution, sigma-delta's noise shaping gives you better performance for the same analog front-end effort. If power consumption is the dominant constraint — say, a battery-powered device that must run for days — I'd look carefully at the sigma-delta's power in continuous mode versus the SAR's per-conversion energy.
+
+I would also consider the multiplexing requirement. If you need to sample multiple sensors with one converter, a SAR ADC with an external mux is straightforward — you trigger a conversion, get the result, switch channels, repeat. A sigma-delta ADC with a mux requires you to wait for the digital filter to settle after each channel switch, which adds latency and complexity. Some sigma-delta ADCs have a "chopper-stabilized" mode that helps with offset drift but further increases settling time.
+
+The practical approach is to define the requirements first: resolution in terms of effective bits (not just the datasheet's resolution), sample rate, number of channels, power budget, latency requirements, and the nature of the noise in the system. Then evaluate both architectures against those requirements with real datasheet numbers — particularly ENOB at the actual sample rate you need, not the maximum specified.
+
+**Possible follow-ups:** How would the presence of 50/60 Hz mains interference affect your choice? What if the device needs to measure two different signals with very different bandwidths using the same ADC?
+
+---
+
+## Q4: How would you approach designing a hardware-based latch circuit for a medical device that must maintain a fault condition (e.g., over-temperature or overcurrent) even after the triggering event has cleared, while ensuring the latch can be reset only through a deliberate, safe action?
+
+**Answer:** A fault latch in a medical device serves two purposes: it ensures the system stays in a safe state after a fault, and it prevents the system from rapidly cycling in and out of a fault condition, which could be worse than staying off. The design challenge is making the latch reliable, predictable, and resettable only through an intentional action.
+
+The classic approach uses a comparator to detect the fault condition, feeding a latch circuit — either a discrete flip-flop or a thyristor/SCR arrangement. When the comparator trips, the latch engages and holds the fault state regardless of whether the triggering condition clears. The reset path must be deliberate — typically a momentary push-button, a system-level command that requires multiple conditions to be met, or a power-cycle that requires the operator to acknowledge the fault.
+
+For the detection stage, I'd use a comparator with hysteresis to prevent chatter at the threshold. The threshold must be accurate over temperature, so I'd consider the comparator's offset voltage and the reference's temperature drift. For overcurrent detection, a sense resistor with a precision reference is common; for over-temperature, a thermistor or RTD in a bridge configuration.
+
+For the latch itself, I'd consider a few options. A D-type flip-flop with the comparator output on the clock or data input is straightforward and predictable. An SCR (silicon-controlled rectifier) is simpler — once triggered, it stays conducting until the anode current is interrupted — but it can be harder to reset cleanly and has less predictable behavior over temperature. A third option is a comparator with positive feedback configured as a Schmitt trigger with a very wide hysteresis — once it trips, the threshold shifts so far that it won't reset until the input changes dramatically. This is simple but can be tricky to make reliable.
+
+The reset mechanism is where the safety requirements really come in. For a medical device, I would not allow an automatic reset — the fault latch should require a deliberate operator action. This could be a physical reset button that's recessed or requires a tool to press, or a reset signal from a supervisory processor that has verified the fault condition has cleared and the system is safe to restart. If the reset comes from firmware, I'd want a hardware interlock that requires the operator to acknowledge the fault — for example, the reset button must be pressed while the system is in a known-safe state.
+
+I'd also consider the power-on behavior. When the device is first powered, the latch must initialize to the non-faulted state. This requires attention to the flip-flop's reset pin and the power-up sequencing — if the comparator's output is indeterminate during power-up, the latch could engage spuriously. A pull-up or pull-down on the latch's reset input, plus a delay to allow the reference and comparator to stabilize, is typically needed.
+
+Finally, I'd verify the latch's behavior under fault conditions — what happens if the fault persists after reset? The latch should re-engage immediately. And what happens if the reset button is held? The latch should not oscillate — it should either stay reset or re-latch, depending on whether the fault is still present. This requires careful design of the reset path to avoid race conditions.
+
+**Possible follow-ups:** How would you test the latch circuit to verify it behaves correctly under all fault and reset scenarios? What failure modes of the latch itself would you consider in a failure modes and effects analysis?
+
+---
+
+## Q5: (Behavioral) Imagine you're the lead hardware engineer on a medical device project, and during a design review, the firmware lead proposes replacing the hardware-based over-temperature protection circuit (a comparator and latch that shuts down the motor driver) with a firmware-based solution that monitors temperature via the ADC and shuts down the motor through a GPIO. The firmware lead argues this will save board space, reduce cost, and allow more flexible threshold adjustment. You believe the hardware approach is necessary because the protection must work even if the firmware hangs or the ADC fails. How would you handle this disagreement?
+
+**Answer:** This is a safety-critical design decision, and the disagreement is fundamentally about where to place trust in the system architecture. My approach would be to move the discussion from opinion to evidence and risk analysis.
+
+First, I would acknowledge the firmware lead's valid points — a firmware solution does offer flexibility, and the cost and board space savings are real considerations. Dismissing those concerns outright would be counterproductive. But I would frame the discussion around the safety requirements, not preferences.
+
+The core question is: what happens if the firmware hangs or the ADC fails while the motor is running and the temperature is rising? In a medical device, the answer to that question determines whether the protection is adequate. A hardware comparator and latch operates independently of the firmware — it has its own reference, its own sensing path, and its own output that directly controls the motor driver's enable pin. Even if the main processor is completely dead, the protection still works.
+
+I would propose we do a formal risk analysis — a DFMEA or similar structured assessment — to evaluate both approaches against the failure modes. The firmware approach introduces single points of failure: the ADC could fail (either hard failure or producing incorrect readings), the firmware could hang or enter an unexpected state, the GPIO could be misconfigured, or a bug in the temperature monitoring code could prevent the shutdown from executing. Each of these failure modes needs a probability and severity assessment. In a medical device, the severity of an over-temperature event that isn't caught could be significant — potentially harming the patient or damaging the device in a way that prevents it from delivering therapy.
+
+I would also raise the question of verification. A hardware comparator circuit can be tested deterministically — you inject a fault condition and verify the output within microseconds. A firmware solution requires testing the software's behavior under fault conditions, including fault injection testing to verify the firmware actually executes the shutdown when the ADC reports an over-temperature condition. This is harder to verify comprehensively, and the verification burden should be part of the decision.
+
+If the firmware lead still disagrees after the risk analysis, I would escalate to the project's safety review process. In a medical device project, there should be a mechanism for resolving safety-critical design disagreements — whether that's a systems engineer, a safety officer, or a design review board. I would document the analysis, present both options with their risk profiles, and let the formal process make the decision. My role is to ensure the safety analysis is thorough and the decision is made with full information, not to win the argument.
+
+That said, I would also look for a middle ground if the schedule or cost pressures are real. For example, could we keep the hardware comparator as a last-resort protection but make the threshold programmable with a digital potentiometer, giving the firmware team some flexibility while maintaining independence? Or could the firmware solution be used as a secondary protection layer in addition to the hardware primary? These compromises might address the firmware lead's concerns while preserving the safety-critical independence.
+
+**Possible follow-ups:** What if the project manager says the schedule doesn't allow time for the hardware approach and pressures you to accept the firmware solution? How would you document your concerns if the decision goes against your recommendation?
