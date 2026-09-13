@@ -1,0 +1,61 @@
+# medical-devices — Day 54
+
+## Q1: How would you approach designing the thermal management for a patient-worn medical sensor that must remain within its safe touch-temperature limit during continuous operation, given that the electronics are sealed in a compact, non-vented enclosure?
+
+**Answer:** Start by establishing the thermal budget rather than jumping to a cooling solution. The first step is to enumerate every heat source — the processor, radio, sensor excitation, and any linear regulators or charging path — and estimate their worst-case dissipation under the actual duty cycle, not just peak. Then define the boundary conditions: the applicable touch-temperature limit for the applied part, the ambient range the device will see (skin-side and room-side can differ substantially), and whether the enclosure is in direct prolonged skin contact or only intermittent contact.
+
+From there, the design problem is really about spreading and conducting heat away from the patient-contacting surface, not "cooling" in the conventional sense. Practical levers include: moving dissipative components physically away from the skin-side surface; using the enclosure itself as a spreader with a thermally conductive but electrically insulating interface; choosing a more efficient regulator topology (switching instead of linear) to cut dissipation at the source; and duty-cycling the radio or high-power sensing modes so average dissipation stays low even if instantaneous peaks are higher. A thermal simulation or a simple lumped-parameter model early on prevents committing to a mechanical design that can't meet the limit.
+
+Verification matters as much as design: you'd want to test at the worst-case ambient and worst-case duty cycle, with the device actually worn or against a skin-equivalent interface, because free-air bench testing will understate the skin-side temperature. If the margin is thin, the fallback is usually to reduce average power or add a thermal barrier between the heat source and the patient surface — but that trade-off has to be made against usability and battery life, so it's worth surfacing early to the whole team.
+
+**Possible follow-ups:**
+- How would you decide between reducing power dissipation at the source versus adding thermal isolation between the electronics and the patient-contacting surface?
+- What would your test setup look like to demonstrate the touch-temperature limit is met at worst-case ambient, and how would you account for the difference between bench and worn conditions?
+
+## Q2: How would you approach deciding whether a given software failure in a medical device should be classified as a safety-related failure requiring formal risk controls, versus a non-safety usability or reliability issue?
+
+**Answer:** The classification should flow from the risk analysis, not from intuition about how "serious" the failure feels. The starting point is to trace the failure to the hazardous situation it could create and then to the harm that could result — that chain, not the software defect itself, determines whether it's safety-related. A crash that only affects a log file is different from a crash that stops a monitoring function, even if both are "software failures."
+
+Practically, I'd work through it like this: identify the function the software was performing, ask what the device does or fails to do when that function fails, and then ask whether that behavior could contribute to a hazardous situation given the device's intended use and reasonably foreseeable misuse. If the answer is yes, it belongs in the risk management process with a documented risk control, and the software likely needs a higher safety classification under IEC 62304, which in turn drives the rigor of the development and verification activities. If the answer is no — the failure degrades convenience or performance but cannot contribute to harm — it's still worth fixing, but it's handled as a quality/reliability issue rather than a safety one.
+
+The subtle cases are the ones where a failure is only hazardous in combination with another fault, or where it's hazardous only in a specific use context. Those are exactly the cases where you want the risk file to be explicit about the assumptions, because a reviewer will ask. And it's important to revisit the classification if the design changes — a function that was non-safety-related can become safety-related if it's later relied upon as a risk control.
+
+**Possible follow-ups:**
+- If a software function is itself used as a risk control for a hardware hazard, how does that change its classification and the verification you'd expect?
+- How would you handle a disagreement where one engineer argues a failure is safety-related and another argues it's purely a usability issue?
+
+## Q3: During IEC 60601-1-2 immunity testing, a device passes radiated RF immunity at most frequencies but shows a reproducible malfunction in a narrow band around one specific frequency. How would you approach diagnosing and resolving it?
+
+**Answer:** A narrow-band, reproducible failure is a strong hint that you're looking at a resonance or a coupling path that's tuned to that frequency, rather than a broad susceptibility problem. The first move is to characterize it precisely: sweep finely around the failing frequency to find the exact center and the width of the band, and note whether the malfunction depends on field orientation, cable routing, or the device's operating mode. That tells you whether you're coupling into a cable, an enclosure seam, or a specific trace or component.
+
+From there, I'd try to localize the coupling path. Common culprits are cables acting as antennas (especially anything long and unshielded), a slot or seam in the enclosure that happens to be near a quarter-wavelength at that frequency, or a high-impedance node on the board that's picking up the field and rectifying it in a semiconductor junction. A useful technique is to deliberately perturb the setup — add ferrites or shielding to one cable at a time, cover seams with copper tape, or probe the board with a near-field probe — and see which change makes the failure move or disappear. That isolates the path.
+
+Once the path is known, the fix is usually one of: filtering or shielding the offending cable, improving the enclosure's seam integrity or adding a gasket, adding a small RC or ferrite bead at the susceptible node, or improving the ground/reference integrity so the coupled energy has somewhere benign to go. It's also worth checking whether the "malfunction" is actually a firmware response to a transient — sometimes the hardware is fine and the software is misinterpreting a glitch as a valid signal, in which case the fix belongs in the firmware's input validation. After any change, re-test at the exact failing frequency and at the band edges, because a fix that shifts the resonance rather than eliminating it can just move the problem.
+
+**Possible follow-ups:**
+- How would you tell the difference between a coupling problem and a firmware input-validation problem when the symptom is the same?
+- If the fix requires a board respin, how would you decide whether to add a temporary mitigation to get through the test or to accept the schedule impact of a proper fix?
+
+## Q4: How would you approach building and maintaining traceability between design inputs, design outputs, verification, and validation in a design history file, especially as the design changes?
+
+**Answer:** Traceability is easiest to maintain when it's a byproduct of how the team works, rather than a document assembled at the end. The foundation is a stable, uniquely identified set of design inputs — each one written so it's testable — and a matching set of design outputs that claim to satisfy them. Every verification activity then points back to the input it verifies, and every validation activity points to the user need or intended use it addresses. If those links are captured as the work happens, the DHF is largely a matter of exporting and formatting.
+
+The hard part is change. When a design input changes, you need to know which outputs, verifications, and validations are affected, and that's only possible if the links are bidirectional and maintained. A practical approach is to keep the traceability in a tool that supports it — a requirements management system or even a well-structured spreadsheet with unique IDs — and to make "update the traceability" a required step in the change control process, not an afterthought. When a change is proposed, the first question should be "what does this touch?" and the traceability matrix answers it.
+
+I'd also build in periodic reviews rather than trusting it to stay correct on its own. Before a design review or a submission, walk the matrix and look for orphans — inputs with no verification, outputs with no parent input, tests that don't map to anything. Orphans are usually a sign that something was added informally and never integrated. The goal isn't a perfect document; it's that a reviewer can pick any requirement and follow it forward to the evidence that it was met, and pick any test and follow it back to the requirement it exists to satisfy.
+
+**Possible follow-ups:**
+- How would you handle a situation where a verification test was performed but the corresponding design input was never formally documented?
+- What would you do if a late design change invalidates a verification that was already completed and signed off?
+
+## Q5: You're the lead engineer, and during a design review the quality manager insists on adding a risk control measure for a hazard the engineering team considers negligible. The schedule impact is significant. How would you handle this situation?
+
+**Answer:** The first thing is to separate the two questions being conflated: whether the risk is real and whether the control is warranted. The engineering team's "negligible" is an estimate, and the quality manager's insistence is a signal that either the estimate isn't well-supported or there's a concern the team hasn't fully articulated. So I'd start by asking the quality manager to walk through their reasoning — what hazardous situation they're worried about, what the severity and probability assumptions are, and whether they're seeing something the team isn't. Sometimes that surfaces a real gap; sometimes it clarifies that the concern is about documentation or about a standard's expectation rather than the physics.
+
+If, after that, the team still believes the risk is low, the productive move is to make the risk estimate explicit and reviewable rather than arguing about the adjective. Put the severity, probability, and detectability on the table with the reasoning behind each, and compare it against the acceptance criteria in the risk management plan. If the estimate genuinely falls below the threshold, that's a defensible position — but it has to be documented, because a reviewer will ask why a known hazard wasn't controlled. If the estimate is borderline, the cost of the control may be worth paying simply to remove the argument and the residual-risk discussion.
+
+On the schedule question, I'd be honest that the impact is real and bring it into the decision rather than letting it be an implicit veto. Options might include implementing a partial control now and a fuller one in a later revision, or documenting the rationale for accepting the risk with a commitment to monitor it in post-market surveillance. What I'd avoid is either steamrolling the quality manager or silently absorbing a schedule hit without the team understanding why. The decision should be made with the risk file open, and the outcome — whatever it is — should be recorded so the reasoning survives the people in the room.
+
+**Possible follow-ups:**
+- If the risk estimate is genuinely below the acceptance threshold but the quality manager still wants the control, how would you resolve the impasse without simply overruling them?
+- How would you document a decision to accept a risk without adding a control, so that it holds up to regulatory scrutiny?
