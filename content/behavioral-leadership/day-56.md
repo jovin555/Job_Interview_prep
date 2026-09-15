@@ -1,0 +1,56 @@
+# behavioral-leadership — Day 56
+
+## Q1: How would you approach a design review where a senior engineer's proposed architecture is technically sound, but the documentation package is too thin for reviewers to evaluate the safety-critical portions — and the engineer is likely to take a request for more detail as a personal criticism?
+**Answer:** The goal is to separate the quality of the idea from the completeness of the evidence, and to make the request about the review's purpose rather than about the person. I'd start by acknowledging the strength of the architecture explicitly and early, so the engineer hears that the concept itself isn't in question. Then I'd reframe the gap in terms of what the review body is obligated to do: a design review for a safety-critical system has to produce a record that an independent reviewer — or eventually a regulator — can follow without the author in the room. If the safety-critical rationale only exists in the engineer's head, the review can't actually discharge its function, regardless of how good the design is.
+
+Concretely, I'd avoid a vague "add more detail" request, which feels like a judgment call. Instead I'd name the specific artifacts the review needs: the failure-mode reasoning for the safety-critical paths, the rationale for key component or architecture choices, and the traceability from requirement to design element. Framing it as "these are the items the review package must contain for any architecture, and here's the template" depersonalizes it — it's a standard, not a critique. I'd also offer to work through it with them rather than leaving it as homework, since thin documentation is often a time problem, not a willingness problem.
+
+If the engineer still reads it as criticism, I'd address that directly but privately: the request is about making their good work defensible and reviewable, and a design that can't be evaluated can't be approved, which hurts them more than anyone. The underlying principle is that documentation completeness is a property of the review process, not a verdict on the engineer.
+
+**Possible follow-ups:**
+- How would you handle it if the engineer argues that the safety-critical reasoning is "obvious" and doesn't need to be written down?
+- What would you do if the review schedule doesn't allow time to fill the documentation gap before the review meeting?
+
+## Q2: How would you approach deciding whether a technical disagreement between two senior engineers should be escalated to your manager, versus resolved within the team?
+**Answer:** I'd treat escalation as a tool with a real cost, not a failure — but also not the default. The first question is whether the disagreement is actually resolvable with the information and authority the team already has. Many technical disputes between strong engineers are really disagreements about unstated assumptions or about which trade-off matters more, and those can usually be resolved by making the criteria explicit: what are we optimizing for, what are the constraints, and what evidence would change either person's mind. If the two positions can be tested — a prototype, a measurement, a calculation — I'd push toward generating that data rather than escalating an opinion contest.
+
+Escalation becomes the right call when the decision exceeds the team's authority or when it's genuinely a values/priority call rather than a technical one. For example, if the disagreement hinges on risk tolerance for a safety-critical function, or on cost/schedule trade-offs that belong to program management, then no amount of engineering debate will settle it — it needs a decision-maker with the right scope. I'd also escalate if the disagreement is blocking progress and the team has genuinely exhausted its ability to resolve it, because letting it fester damages the project and the relationship.
+
+The key is to escalate the *decision*, not the *conflict*. I'd frame it to my manager as "here are the two options, here's the trade-off, here's what we need decided and by when" — not "these two can't agree." That keeps it constructive and gives the manager what they need to decide quickly. And I'd make sure both engineers feel their position was represented fairly, so escalation doesn't read as one person winning by going over the other's head.
+
+**Possible follow-ups:**
+- How would you keep the relationship between the two engineers intact after an escalation?
+- What would you do if your manager's decision went against the option you personally thought was correct?
+
+## Q3: How would you approach building a cross-functional project timeline for a medical device when the hardware, firmware, and regulatory teams each give different estimates and there's no historical data from similar projects?
+**Answer:** When there's no historical baseline, the danger is treating three independent guesses as if they compose into a reliable plan. I'd start by making the estimates comparable — the teams are often estimating different things (hardware might mean "board bring-up," firmware might mean "feature complete," regulatory might mean "submission-ready"), so the first step is agreeing on definitions of done for each workstream and on the dependencies between them. A lot of apparent disagreement dissolves once everyone is estimating the same scope.
+
+Next I'd separate the estimate into the parts we're confident about and the parts we're not. Even without historical data, teams usually know which tasks are routine and which are genuinely uncertain — a new sensor integration, an unproven regulatory pathway, a first-time wireless certification. I'd represent those unknowns explicitly rather than burying them in a single number, and I'd build the timeline around the critical path and the dependency chain, because in medical device development the schedule is usually driven by sequencing (design freeze → verification → regulatory submission) rather than by any one team's effort.
+
+Because there's no history, I'd treat the first plan as a hypothesis to be refined, not a commitment. I'd set explicit checkpoints where estimates get re-baselined as real data comes in, and I'd communicate ranges rather than false precision — "regulatory review is three to six months depending on whether questions come back" is more honest and more useful than a single date. I'd also look for any partial analogs, even outside the exact product class, to sanity-check the shape of the plan. The overarching principle is to make uncertainty visible and managed rather than hidden behind an optimistic number.
+
+**Possible follow-ups:**
+- How would you present a range-based timeline to leadership that expects a single delivery date?
+- How would you decide which unknowns are worth spending early effort to de-risk versus which you accept as schedule risk?
+
+## Q4: How would you approach handling a situation where a team member consistently delivers high-quality technical work but has a pattern of missing internal deadlines, causing downstream delays for the rest of the team?
+**Answer:** I'd resist the temptation to treat this as either "great work, ignore the dates" or "missing deadlines, performance problem." The pattern matters more than any single miss, and the first job is to understand the cause before deciding on a response. High-quality-but-late often has a specific root: the person may be underestimating tasks, gold-plating work beyond what the milestone required, avoiding asking for help until they're stuck, or genuinely being overloaded. Each of those calls for a different fix, so I'd start with a direct, non-accusatory conversation to find out which it is.
+
+If it's estimation, I'd work with them on breaking tasks down and building in explicit checkpoints, so slippage is visible early rather than discovered at the deadline. If it's over-polishing, I'd help them distinguish "good enough to unblock the next person" from "perfect," and make clear that on a shared timeline, an internal milestone is often about handing off a workable increment, not a finished artifact. If it's a reluctance to ask for help, that's a coaching issue about early escalation. If it's genuine overload, that's a resourcing conversation I own, not them.
+
+Throughout, I'd make the downstream impact concrete and visible — not as blame, but so the person understands that their lateness isn't a private trade-off, it's a cost borne by colleagues who are now blocked or scrambling. And I'd set clear expectations going forward with checkpoints, because a pattern that's been tolerated implicitly will continue. The principle is to protect the team's throughput while treating the individual as someone to be understood and coached, not just corrected.
+
+**Possible follow-ups:**
+- How would you handle it if the person insists their quality justifies the extra time and resists changing?
+- At what point would a persistent pattern shift from a coaching issue to a formal performance-management issue?
+
+## Q5: How would you approach leading a post-mortem after a medical device project missed its delivery deadline by several months, when morale is low and there's a tendency to blame individual contributors rather than systemic issues?
+**Answer:** The first thing I'd do is set the frame before the meeting, because a post-mortem's value depends entirely on whether people feel safe telling the truth. If the room expects a blame session, the real causes stay hidden and the exercise produces nothing but defensiveness. I'd state explicitly that the purpose is to find systemic causes and prevent recurrence, not to assign fault, and that the assumption going in is that people acted reasonably given what they knew at the time. That's not about being soft — it's that blame is simply a worse tool for finding root causes.
+
+Methodologically, I'd steer the discussion toward the system: what decisions, assumptions, handoffs, or missing information led to the outcome, and where were the points at which a different choice was realistically available. I'd use a structured approach — a timeline of key events, then causal analysis — so the conversation is anchored in facts rather than recollections and recriminations. When someone starts pointing at a person, I'd redirect to the conditions that allowed the problem: was the estimate unrealistic, was a risk known but not surfaced, was there no checkpoint where the slippage could have been caught earlier? Those are the things we can actually change.
+
+I'd also make sure the post-mortem produces concrete, owned actions — not a vague "we'll communicate better," but specific changes to how estimates are made, how risks are escalated, or how milestones are gated. And I'd close by acknowledging the genuine difficulty of the project and the effort people put in, because low morale plus a blame-heavy post-mortem is how you lose good people. The goal is a team that leaves knowing what to do differently and feeling that the process was fair.
+
+**Possible follow-ups:**
+- How would you handle it if leadership above you is pushing for a specific individual to be held accountable?
+- How would you make sure the corrective actions from the post-mortem actually get implemented rather than filed away?
