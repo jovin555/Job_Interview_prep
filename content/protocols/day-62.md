@@ -1,0 +1,57 @@
+# protocols — Day 62
+
+## Q1: How would you approach debugging an I2C bus where a slave device holds SDA low after a transaction, preventing any further communication until power is cycled?
+
+**Answer:** A stuck SDA line is almost always a state-machine desynchronization between master and slave, not a hardware failure. The slave believes it is still mid-transaction — perhaps it was expecting another clock edge, or it entered a read state and is now driving a data bit — while the master has already moved on. The classic recovery is to manually clock the bus: configure SCL as a GPIO, toggle it up to nine times while SDA is released, and watch for SDA to go high. Nine clocks is the maximum number of bits in a byte plus the ACK slot, so this walks any slave through to a byte boundary where it should release SDA. If SDA releases, issue a proper STOP condition to reset all state machines, then re-init the peripheral.
+
+The more important question is why it happened. Common root causes: a master reset or brownout mid-transaction leaving the slave mid-byte; a missing or malformed STOP condition; clock stretching that the master aborted by timing out; or a slave with a known errata around repeated-start handling. I would look at whether the failure correlates with a specific transaction type, whether the master has a timeout that aborts mid-transfer, and whether the slave's datasheet documents any such behavior. The fix is usually a combination of a bus-recovery routine in firmware (clock-out plus STOP) and eliminating the condition that desynchronizes the slave in the first place — for example, ensuring the master never abandons a transaction without generating a STOP, and adding a hardware reset line to the slave if the errata is unavoidable.
+
+**Possible follow-ups:**
+- How would you implement the bus-recovery routine so it doesn't interfere with other devices on the same bus?
+- If the slave has no reset pin, what other options do you have to force it back to a known state?
+
+## Q2: In a system where an SPI master talks to several slaves at different clock speeds, how would you approach structuring the firmware so that mode and speed changes are handled safely?
+
+**Answer:** The core risk is that CPOL/CPHA and clock speed are properties of the *transaction*, not the bus, so every transfer must be bracketed by a reconfiguration of the SPI peripheral — and that reconfiguration must not happen while a transfer is in flight or while a chip select is asserted. I would structure the firmware around a per-device descriptor that carries the required mode, prescaler, and any device-specific timing (setup/hold, inter-byte delay), and a single bus-arbitration layer that owns the peripheral. Any caller requests a transfer by device handle; the bus layer checks whether the peripheral is already configured for that device, and if not, reconfigures it *before* asserting chip select. Chip select is asserted only after the peripheral is in the correct mode, and de-asserted before any subsequent reconfiguration.
+
+A few details matter in practice. First, the SPI peripheral should be disabled or placed in a safe state during reconfiguration — some MCUs glitch the clock line when you change CPOL/CPHA while enabled, which can be interpreted as a spurious edge by a slave that still has CS asserted. Second, if two devices share a bus and one is much slower, the fast device's transfers should not be allowed to starve the slow one; a simple round-robin or priority scheme at the bus layer prevents that. Third, if the MCU supports per-transfer configuration via DMA descriptors or a hardware queue, that can eliminate the reconfiguration overhead entirely, but the same ordering rules apply. Finally, I would make the bus layer the *only* code that touches the SPI registers, so there is a single place to reason about mode and speed changes.
+
+**Possible follow-ups:**
+- What would you do if a slave's datasheet specifies a minimum time between CS de-assertion and the next CS assertion on the same bus?
+- How would you verify in test that no transfer ever occurs with the wrong mode or speed?
+
+## Q3: You're debugging a CAN-FD network where a node occasionally transmits an error frame that corrupts an in-progress message from another node, but only under heavy bus load. How would you approach this?
+
+**Answer:** An error frame is a node's way of saying "what I received does not match what I transmitted" — so the first question is *which* node is generating it and *why*. Under heavy load, the most common causes are bit-timing margin and sample-point mismatch. CAN-FD's data phase runs at a much higher bit rate than the arbitration phase, and if the sample point or the propagation delay segment is not tuned for the actual bus length and transceiver loop delay, a node can sample a bit at the wrong moment and flag an error. This shows up under load because the bus is busier, arbitration is more frequent, and any marginal timing has more opportunities to fail.
+
+I would approach it in layers. First, capture the bus with a CAN analyzer that timestamps error frames and identifies the transmitting node — the error frame itself carries a flag, and the node that *detects* the error is not necessarily the node that *caused* it. Second, check the bit-timing configuration on every node: nominal bit rate, data bit rate, sample point, and SJW should be consistent, and the propagation segment should account for the worst-case bus length plus transceiver delay. Third, check the physical layer — a marginal termination, a long stub, or a transceiver with slow loop delay can push a node's sampling outside the valid window. Fourth, look at whether the error is a form error, stuff error, or CRC error, because each points at a different cause. If it is a stuff error under load, that often indicates a bit-timing issue; if it is a CRC error, it may be a physical-layer integrity problem.
+
+The fix is usually to re-tune the bit timing so all nodes sample at the same point with adequate margin, and to verify the physical layer meets the requirements for the chosen data-phase bit rate. If the bus length cannot be reduced, the data-phase bit rate may need to be lowered — CAN-FD's higher data rate is only usable over the bus length and topology that the timing budget allows.
+
+**Possible follow-ups:**
+- How would you determine the maximum usable data-phase bit rate for a given bus length and transceiver?
+- What is the difference between an error-active and error-passive node, and how does that affect the network?
+
+## Q4: How would you approach implementing flow control on a UART link where the receiver occasionally cannot keep up with the transmitter, but the protocol does not have a built-in backpressure mechanism?
+
+**Answer:** If the protocol has no backpressure, you have three options: add it at the link layer, add it at the application layer, or eliminate the need for it by making the receiver fast enough. The right choice depends on whether you control both ends and whether the protocol is fixed.
+
+If you control both ends, the cleanest solution is hardware flow control — RTS/CTS — which lets the receiver de-assert CTS when its buffer is nearly full, and the transmitter pauses mid-stream. This is transparent to the application protocol and is the standard answer. If the hardware does not support RTS/CTS, or the connector does not have the pins, you can implement a software flow-control scheme using XON/XOFF characters, but that only works if the payload is text-safe and the receiver can process the flow-control characters out-of-band. A more robust software approach is a credit-based scheme: the receiver periodically sends a "credit" message telling the transmitter how many bytes it may send, and the transmitter stops when credits are exhausted. This requires a framing layer that can carry both data and control messages, but it is deterministic and does not depend on special characters.
+
+If you cannot change the protocol at all, the remaining option is to make the receiver fast enough — larger DMA buffers, interrupt-driven reception instead of polling, or a higher-priority task for the UART — so that overrun never occurs in practice. That is a band-aid, but it is sometimes the only option when the protocol is fixed by a third party. In all cases, I would add overrun detection and logging so that if the receiver does drop a byte, it is visible rather than silent.
+
+**Possible follow-ups:**
+- How would you handle the case where the receiver's buffer fills during a burst that the transmitter cannot pause mid-message?
+- What are the trade-offs between hardware flow control and a credit-based software scheme in terms of latency and complexity?
+
+## Q5: Imagine you're leading a design review where a junior engineer proposes using a single shared interrupt line for three different peripherals — a UART, an SPI sensor, and a GPIO alarm input — arguing that it saves pins and the firmware can just poll the peripherals to find out which one fired. How would you guide the team to evaluate this approach?
+
+**Answer:** I would start by separating the two claims: pin savings and firmware simplicity. The pin savings are real but small — three interrupt lines versus one — and the cost is that every interrupt now requires the firmware to poll three peripherals to determine the source. That polling is not free: it adds latency to the interrupt service routine, it can mask the true source if two peripherals fire close together, and it makes the ISR harder to reason about because the same vector can mean three different things.
+
+The more serious concern is the alarm input. A GPIO alarm is typically the highest-priority, lowest-latency signal in a medical device — it may indicate a patient condition that needs immediate response. Sharing its interrupt line with a UART that may be receiving a continuous stream of data means the alarm's latency is now coupled to how quickly the firmware can rule out the UART and SPI as the source. That is a determinism problem, and in a medical device it is a risk-management problem, not just a performance one.
+
+I would guide the team to evaluate it against the system's latency and determinism requirements. If the alarm must be serviced within a bounded time, a dedicated interrupt line is the straightforward way to guarantee that. If pin count is genuinely constrained, the next option is to give the alarm its own line and share the UART and SPI — those two are lower-stakes and their sources can be distinguished by reading status registers. The shared-line approach is only acceptable if the worst-case latency of the polling ISR is measured and shown to meet the requirement, and if the firmware has a clear priority scheme for resolving simultaneous sources. I would also ask the junior engineer to document the failure modes: what happens if two peripherals fire in the same cycle, and how does the firmware guarantee neither is lost?
+
+**Possible follow-ups:**
+- How would you measure the worst-case latency of a shared-interrupt ISR to prove it meets the requirement?
+- If the team decides to share the line anyway, what firmware structure would you recommend to keep the ISR deterministic?

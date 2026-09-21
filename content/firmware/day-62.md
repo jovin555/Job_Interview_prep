@@ -1,0 +1,83 @@
+# firmware — Day 62
+
+## Q1: How would you approach designing a firmware module that must survive a brownout — the supply voltage sags briefly but doesn't fully drop — without corrupting persistent state or producing a spurious reset?
+
+**Answer:** The core problem is that a brownout is a window where the MCU may still be executing but is no longer guaranteed to be operating within spec: flash writes can partially complete, RAM contents can become indeterminate, and the analog peripherals feeding your control logic can produce garbage. The design has to assume that any code running during the sag is untrustworthy, so the goal is to detect the event early and get to a safe state before the supply falls below the MCU's minimum operating voltage.
+
+On the hardware side, I'd want the brownout detector (BOD) or supply voltage supervisor configured with a threshold comfortably above the MCU's minimum VDD, plus enough bulk capacitance on the rail to guarantee the MCU can finish an orderly shutdown in the time between the BOD firing and the rail collapsing. That hold-up time is a hardware budget, and it needs to be validated, not assumed — I'd want to measure it on the bench with a scope while injecting a controlled sag.
+
+In firmware, the BOD should be treated as a non-maskable, highest-priority event. The handler's job is minimal and must not itself depend on anything that could be corrupted: stop any in-progress flash write or erase at a safe boundary if the peripheral allows it, mark any in-flight persistent record as invalid or incomplete, and then either hold the device in reset or park it in a tight loop until the supply recovers. Critically, the handler must not attempt to *complete* a write — a partially written record that's clearly marked invalid is far safer than a record that looks valid but contains torn data.
+
+For persistent state, the general pattern is to never overwrite the only copy of anything. Use a journal or a dual-slot scheme where a new record is written to a fresh location, validated by CRC, and only then is the pointer or sequence number updated. That way a brownout mid-write leaves the previous good record intact and the new one obviously incomplete. This is the same discipline you'd apply for power-loss tolerance in a data logger, and it's worth applying even if brownouts are expected to be rare, because the failure mode — silently corrupted calibration or configuration data — is much worse than a clean reset.
+
+Finally, I'd want the recovery path tested deliberately: inject sags at many points in the write sequence, including inside the flash page program, and verify that on the next boot the firmware either uses the last good record or cleanly reinitializes. A brownout strategy that's only reasoned about and never fault-injected is not really validated.
+
+**Possible follow-ups:**
+- How would you decide the BOD threshold and the hold-up capacitance together, given that a higher threshold gives more margin but trips on legitimate supply dips?
+- If the MCU has no hardware BOD, how would you detect an impending brownout in firmware, and what are the limits of that approach?
+
+## Q2: You're debugging a firmware issue where a device's behavior is correct on the first power-up after flashing, but after a warm reset (without power cycling) a peripheral initializes incorrectly. How would you approach this?
+
+**Answer:** The asymmetry between cold boot and warm reset is the key clue. On a cold boot, every register in every peripheral starts at its hardware reset value, and the supply rails have come up from zero in a defined sequence. On a warm reset, the CPU restarts but many peripherals may retain state — either because the reset didn't cover them, because they're in a different power domain, or because the reset was a software-triggered one that only resets the core. So the bug is almost always one of: the firmware assumes a reset value that isn't actually restored, or it skips an initialization step because it thinks the peripheral is already configured.
+
+My first move would be to read the reset cause register and log it, so I know exactly what kind of reset occurred. Then I'd compare the peripheral register state after a cold boot against the state after a warm reset, ideally by dumping the relevant registers in both cases and diffing them. That usually points straight at the register or bit that's carrying over.
+
+Common culprits: a peripheral whose clock was gated and never re-enabled, a DMA channel still armed from before the reset and now writing into a buffer that's been reinitialized, an interrupt flag that was set and never cleared so the ISR fires immediately on re-enable, or a configuration register that's only writable once after a full power-on reset and is silently ignored on a warm reset. The last one is particularly nasty because the write appears to succeed — there's no error — but the value doesn't take.
+
+The fix depends on the cause. If it's a sticky interrupt flag, clear all pending flags before enabling the interrupt. If it's a peripheral that survives warm reset, explicitly reconfigure it from scratch rather than relying on reset defaults — the initialization routine should be idempotent and not assume any prior state. If it's a one-time-writable register, the design needs to either force a full reset in that path or avoid depending on that register being reprogrammed.
+
+The broader lesson I'd take from this is that "initialize the peripheral" should mean "put it into a known state," not "write the values I expect it to need." A driver that's only correct from a cold boot is a latent bug, and warm resets happen in the field — watchdog resets, software resets after a fault, resets triggered by a debugger. I'd want the bring-up sequence to be exercised under both cold and warm reset as part of normal testing.
+
+**Possible follow-ups:**
+- How would you structure a peripheral init routine so that it's provably idempotent, and how would you test that?
+- If the reset cause register shows the device is resetting repeatedly in the field, how would you capture enough context to diagnose it without a debugger attached?
+
+## Q3: How would you approach implementing a firmware module that must timestamp events with millisecond resolution across a device that sleeps for long periods, where the timestamp must remain monotonic and must not be corrupted by the sleep/wake transition?
+
+**Answer:** The tension here is between a high-resolution tick that only runs while the CPU is awake and a low-power timebase that keeps counting through sleep. A typical MCU has a fast system tick (say 1 kHz from the core timer) that stops or becomes unreliable in deep sleep, and a separate low-power counter — often a 32.768 kHz RTC or a dedicated low-power timer — that keeps running. The design has to stitch these together into a single monotonic timeline.
+
+The cleanest approach is to treat the low-power counter as the authoritative timebase and use the fast tick only for sub-tick resolution while awake. On each wake, read the low-power counter, convert it to milliseconds, and use that as the base for the current awake period. While awake, add the fast tick's elapsed count to that base. The fast tick is reset or re-synced at each wake so it never has to span a sleep period. This keeps the authoritative time monotonic by construction, because the low-power counter only ever moves forward.
+
+The subtlety is the wake transition itself. There's a window between the low-power counter being read and the fast tick being started where events could occur, and a window at sleep entry where the fast tick is stopped but the low-power counter keeps running. If you're not careful, you can double-count or skip a few milliseconds. The fix is to make the transition atomic with respect to the event sources — disable the relevant interrupts, read the low-power counter, latch the fast tick's current value, compute the offset, then re-enable. The event timestamping function then always reads from the stitched timeline, never from either counter directly.
+
+For monotonicity, I'd also want a guard against the low-power counter wrapping or being read during a rollover. If it's a 32-bit counter at 32.768 kHz, it wraps roughly every 36 hours, so a naive read can produce a timestamp that jumps backward. The standard fix is to read the counter twice and check for consistency, or to maintain a software extension word that's incremented on each wrap interrupt. Either way, the timestamp API should never expose a value that can go backward, even transiently.
+
+Finally, I'd want to validate the whole thing under fault injection: sleep for varying durations, wake at times that land near counter rollover, and verify that timestamps are strictly increasing and that the drift between the stitched timeline and a reference clock is within the crystal's tolerance. The RTC crystal's accuracy — and its temperature behavior — becomes the dominant error term over long sleeps, so if millisecond accuracy matters after hours of sleep, that has to be part of the error budget.
+
+**Possible follow-ups:**
+- How would you handle the case where the low-power counter's crystal has significant temperature drift, and the timestamps need to be accurate enough for post-hoc event ordering?
+- If the device can be power-cycled, how would you persist the timeline across a full power loss without a battery-backed RTC?
+
+## Q4: A junior engineer on your team has implemented a firmware module that works correctly in testing, but you notice it uses a `volatile` global variable as the sole synchronization mechanism between an ISR and a thread. They argue that `volatile` guarantees the compiler won't optimize the access away, so it's safe. How would you guide them?
+
+**Answer:** I'd start by acknowledging the part they got right: `volatile` does prevent the compiler from caching the variable in a register or reordering accesses to *that variable* relative to other volatile accesses. That's a real and necessary property, and it's why `volatile` shows up in ISR-shared flags. But it's not sufficient for synchronization, and the gap is worth walking through concretely rather than just asserting "use atomics."
+
+The core issue is that `volatile` says nothing about atomicity or ordering with respect to *non-volatile* accesses. If the shared variable is wider than the machine's natural word — a 32-bit value on a 16-bit MCU, or a struct — the ISR can be observed mid-update by the thread, and `volatile` won't prevent that. Even for a single-byte flag, `volatile` doesn't create a memory barrier: the compiler and the CPU are both free to reorder non-volatile accesses around the volatile one, so a pattern like "set data, then set flag" can be observed by the reader as "flag set, data not yet visible." On a single-core Cortex-M with a simple memory model this often works in practice, which is exactly why the bug is insidious — it passes testing and fails in the field, or fails only when the optimizer is more aggressive or the code is inlined differently.
+
+The right guidance depends on what the variable is actually doing. If it's a simple flag or a small counter, the fix is to use the platform's atomic primitives — `atomic_set`, `atomic_get`, or the C11 `_Atomic` types — which give both atomicity and the ordering guarantees. If it's a larger data structure being passed between ISR and thread, the right pattern is usually a lock-free single-producer/single-consumer queue or a double-buffer with an atomic index swap, not a shared struct with a flag. And if the data is genuinely small and the semantics allow it, a `k_sem` or `k_event` from the RTOS gives a clean, well-understood synchronization point — though I'd note that some RTOS primitives aren't safe to call from an ISR, so the choice depends on context.
+
+I'd also want to make the lesson stick by showing them a concrete failure. The most effective way is often to write a small test that exercises the pattern under a compiler with optimization enabled and a memory model that exposes the reordering — or to point at the generated assembly and show that the non-volatile store was moved after the volatile flag set. Once they see the compiler doing the thing they assumed it wouldn't, the abstract argument becomes concrete.
+
+The broader point I'd want to land is that `volatile` is a tool for describing *how a variable is accessed*, not for describing *how two execution contexts coordinate*. Those are different problems, and conflating them is one of the most common sources of intermittent embedded bugs. I'd frame the guidance as "here's the mental model that will keep you out of trouble," not "you did it wrong."
+
+**Possible follow-ups:**
+- How would you decide between an atomic flag, a lock-free queue, and an RTOS semaphore for a given ISR-to-thread communication pattern?
+- If the shared data is a multi-field struct that must be updated atomically, what are the options, and what are the trade-offs between them?
+
+## Q5: How would you approach a situation where you've been asked to add a feature to a firmware module that has no tests, no documentation, and a reputation for being fragile, and the change needs to ship on a tight schedule?
+
+**Answer:** The instinct to just make the change and move on is understandable, but it's also how fragile modules stay fragile — and how a small feature request turns into a field failure. I'd approach it as a risk-management problem: figure out what the change actually touches, build just enough of a safety net to make the change confidently, and be explicit with stakeholders about what's being traded off.
+
+First, I'd spend time understanding the module before touching it. That means reading the code, tracing the call paths that the new feature will interact with, and — most importantly — talking to whoever knows the module's history. The "reputation for being fragile" is usually a compressed version of specific past failures, and those failures often cluster around particular subsystems or assumptions. Knowing where the landmines are is worth more than any amount of static analysis.
+
+Second, I'd look for the cheapest way to get observability. If the module has no tests, I can't safely refactor it, but I can often add characterization tests around the specific behavior the new feature depends on — not full coverage, just enough to pin down the contracts I'm about to rely on. If the module runs on hardware, a logic analyzer or a debug print at the boundaries can serve the same purpose. The goal isn't a test suite; it's a way to know when I've broken something.
+
+Third, I'd design the change to be as isolated as possible. If the new feature can be added as a new code path that calls into the existing module through its existing interface, rather than modifying the module's internals, that's almost always the right call — even if it's slightly less elegant. The fragile module stays untouched, and the new feature's blast radius is limited to code I wrote and can test. If the change genuinely requires modifying the module's internals, I'd want to do it in the smallest possible increments, with a way to verify each increment before moving on.
+
+Fourth, I'd be honest with the people asking for the schedule. "This can ship on time if we accept that we're modifying an untested module and we won't know if we broke something until it's in the field" is a real option, but it should be a conscious decision, not a default. If the feature is important enough to ship, it's important enough to spend a day building a minimal safety net. If the schedule genuinely can't accommodate that, the right move is to escalate the trade-off, not to silently absorb the risk.
+
+Finally, I'd leave the module better than I found it — but incrementally. Adding a header comment that documents the module's actual contracts, or a single characterization test for the path I touched, is a small investment that pays off the next time someone has to change it. The goal isn't to fix the module in one heroic pass; it's to stop the next person from having to start from zero.
+
+**Possible follow-ups:**
+- How would you decide when a module is fragile enough that the right answer is to rewrite it rather than patch it?
+- If you discover mid-change that the module has a latent bug unrelated to your feature, how would you handle it given the schedule pressure?
