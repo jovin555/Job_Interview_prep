@@ -1,0 +1,64 @@
+# behavioral-leadership — Day 63
+
+## Q1: How would you approach structuring a root-cause investigation when a failure is intermittent, cannot be reproduced on demand, and the team is under pressure to ship a fix quickly?
+**Answer:** The first move is to separate containment from correction, because the pressure to "ship a fix" usually conflates the two. Containment is whatever reduces patient or user risk right now — tightening a screening threshold, adding a diagnostic log, restricting use to a supervised setting — and it can be justified and documented quickly without claiming to have found the cause. Correction is the actual root cause, and it should not be rushed just because containment bought time.
+
+For an intermittent failure, the investigation strategy has to change from "reproduce then diagnose" to "instrument then wait." I'd define what a capture looks like before touching anything: what signals get logged, at what rate, with what timestamps, and how the logs are synchronized across hardware and firmware domains. If the failure is a timing or noise phenomenon, the instrumentation itself has to be designed carefully — a debug probe or a logging routine that changes timing or loading can make the bug disappear, which is its own clue but also a trap.
+
+In parallel, I'd build a structured hypothesis set rather than chasing the first plausible story. A fishbone pass across the categories — environment, power, timing, component tolerance, firmware state, user interaction — gives a map of what could plausibly produce an intermittent symptom. Then I'd rank hypotheses by how well they explain the *pattern* of failures: does it correlate with temperature, with battery state, with a particular firmware path, with a specific production lot? Even without reproduction, correlation data narrows the space enormously.
+
+The 5 Whys discipline matters here too, but applied to the *evidence*, not to a guessed cause. "Why did the reading spike?" → "Because the ADC saw a transient" → "Why did the ADC see a transient?" — each step should be backed by something observed, not assumed. If a step can't be backed, that's where the next experiment goes.
+
+Finally, verification of effectiveness: once a candidate cause is identified and a fix proposed, the fix has to be validated against the original failure mode, not just against the bench. For an intermittent issue, that often means a defined burn-in or accelerated-life test with a pass criterion agreed in advance, so the team can't rationalize a weak result into a pass under schedule pressure.
+
+**Possible follow-ups:** How would you decide when containment is sufficient versus when you need to halt shipment entirely? What would you do if the instrumentation itself seems to be suppressing the failure?
+
+## Q2: How would you approach translating a hardware constraint — such as limited ADC resolution or a noisy analog front end — into terms the firmware team can act on, without either oversimplifying or burying them in detail?
+**Answer:** The failure mode I try to avoid is handing firmware a number without context. "The ADC is 12-bit" is technically true and practically useless; it doesn't tell the firmware engineer what they can and can't expect, or where their filtering has to do work versus where it's papering over a hardware problem.
+
+What I'd aim to deliver is a short characterization of the analog front end as a *system*: the effective resolution at the point of interest (not the nominal ADC bits), the noise floor and its spectral character (is it white, is it 1/f, is there a switching component?), the bandwidth of the signal of interest, and the known interference sources — supply ripple, nearby digital switching, motor commutation, whatever applies. That's the information firmware needs to choose a filter, set a sampling rate, and decide whether averaging, oversampling, or a more deliberate approach is warranted.
+
+The second thing I'd do is agree on a shared figure of merit. If hardware says "the noise is X" and firmware says "the readings are jumpy," they're describing the same phenomenon in incompatible units and will talk past each other. Picking one — say, peak-to-peak variation at the output of the sensor under defined conditions — gives both sides a common target and a common test.
+
+Third, I'd be explicit about what hardware has already done and what it hasn't. If decoupling and layout have been optimized, firmware shouldn't be asked to compensate for a problem that's already been addressed at the source; conversely, if there's a known residual that hardware can't remove within the mechanical or cost envelope, firmware needs to know that's a real constraint and not a temporary one.
+
+Finally, I'd keep the interface bidirectional. Firmware often discovers things about the analog behavior that hardware didn't see on the bench — a particular operating mode, a temperature range, a transient at wake-up. That feedback has to flow back, or the next hardware revision repeats the same assumptions.
+
+**Possible follow-ups:** How would you handle it if firmware's filtering is masking a hardware issue that should really be fixed at the source? What if the two teams disagree on what the "effective resolution" actually is?
+
+## Q3: How would you approach a design review where the presenter is a strong engineer but has a history of becoming defensive when their work is questioned, and you need the review to be genuinely critical to be useful?
+**Answer:** The first thing I'd do is change the framing of the review itself, before the meeting. If the presenter experiences the review as an evaluation of them, defensiveness is a rational response. If the review is framed as "we're here to find the problems now, while they're cheap to fix," the same questions land differently. That framing has to be set by the chair, consistently, and reinforced by how the chair responds to the first critical comment — if the chair lets a sharp question hang in the air without redirecting it toward the design rather than the designer, the room learns that reviews are adversarial.
+
+Practically, I'd structure the review so the presenter isn't the sole defender. Assign specific reviewers to specific areas in advance — power, signal integrity, thermal, firmware interface — so the critique is distributed and expected rather than a pile-on. I'd also ask the presenter to bring their own list of open questions and known weaknesses. An engineer who has already named the soft spots in their design is much harder to make defensive, because the review is confirming their own analysis rather than ambushing them.
+
+During the review, I'd model the language I want. "What happens if the load transient exceeds this?" is a question about the design. "Why didn't you account for the load transient?" is a question about the person. Same technical content, very different reception. If a reviewer slips into the second form, the chair's job is to rephrase it neutrally, not to scold the reviewer — that keeps the room focused and avoids a second conflict.
+
+If defensiveness still shows up, I'd handle it privately afterward rather than in the room. The goal is to keep the review productive for everyone present, and a one-on-one conversation about how the questions are landing is more likely to change behavior than a public correction.
+
+**Possible follow-ups:** What would you do if the defensiveness is affecting the quality of the review — for example, if reviewers start softening their questions to avoid a reaction? How would you handle it if the presenter's manager is in the room and the dynamic changes?
+
+## Q4: How would you approach deciding whether a technical disagreement between two senior engineers should be escalated to your manager, versus resolved within the team?
+**Answer:** The default should be to resolve it within the team, because escalation has a cost — it takes the decision out of the hands of the people closest to the technical detail, and it can set a precedent that every hard disagreement goes upward. But "resolve it within the team" doesn't mean "force a consensus." It means running a process that produces a decision the team can live with, even if one side doesn't get their preferred outcome.
+
+The first question I'd ask is whether the disagreement is actually technical or whether it's about something else — scope, ownership, risk tolerance, past history. If two senior engineers are arguing about a watchdog architecture, the underlying disagreement might be about who owns safety-critical decisions, or about whether the last project's failure is being relitigated. Escalating a technical question that's really a relationship question just moves the symptom upward.
+
+If it is genuinely technical, I'd try to convert it into something testable. Can we prototype both approaches and measure? Can we define the criteria in advance — power, latency, BOM cost, verification effort, failure modes — and score both against them? A surprising number of "fundamental disagreements" dissolve once the criteria are explicit, because one side turns out to be optimizing for something the other side doesn't actually care about.
+
+If the criteria can't be made objective — say, it's a judgment call about long-term maintainability — then the decision has to be made by whoever owns the consequence. That's usually me, as the lead, and I'd make it explicitly, document the rationale, and take responsibility for the outcome. That's not escalation; that's leadership.
+
+Escalation to my manager is appropriate when the decision exceeds my authority (budget, headcount, cross-team scope), when it has regulatory or legal implications I'm not positioned to assess, or when the disagreement has become a blocker that's affecting the team's ability to work together and my attempts to resolve it have failed. In that last case, I'd escalate with a clear summary of the options and my recommendation, not just "we can't agree."
+
+**Possible follow-ups:** How would you handle it if the engineer who "loses" the decision continues to argue against it after it's been made? What would you document, and where, so the rationale survives the project?
+
+## Q5: How would you approach building a cross-functional project timeline for a medical device when the hardware, firmware, and regulatory teams each give different estimates and there's no historical data from similar projects?
+**Answer:** The absence of historical data is the real problem, and the wrong response is to average the three estimates and call it a plan. Averaging hides the disagreement instead of resolving it, and it produces a number nobody actually believes.
+
+What I'd do instead is decompose each team's estimate into its components and identify which parts are *known* versus *assumed*. Hardware might be confident about schematic capture and layout, and uncertain about a new sensor's characterization. Firmware might be confident about the driver layer and uncertain about the control loop tuning. Regulatory might be confident about the submission format and uncertain about how long a particular test will take to schedule. Once the estimates are broken down, the uncertainty is localized, and the conversation shifts from "whose number is right" to "which specific unknowns are driving the spread."
+
+Then I'd attack the unknowns directly. For each one, is there a cheap way to reduce it — a bench experiment, a vendor conversation, a literature search, a small prototype? The point isn't to eliminate uncertainty; it's to convert the biggest unknowns into smaller ones before committing to a date. A timeline built on reduced uncertainty is worth more than a timeline built on optimism.
+
+I'd also build the plan around dependencies rather than around parallel workstreams that assume everything proceeds independently. In medical device development, regulatory and verification activities are often gated by design freeze, and design freeze is gated by hardware and firmware convergence. Making those gates explicit — and putting dates on the gates rather than on the final delivery — gives the team something to manage week to week, and gives stakeholders visibility into where the real risk sits.
+
+Finally, I'd present the timeline as a range with named risks, not a single date. "We expect to reach design freeze in this window; the biggest risk to that window is X, and here's what we're doing to reduce it." That's honest, it's actionable, and it gives the team a way to communicate slippage early rather than at the deadline.
+
+**Possible follow-ups:** How would you handle it if leadership insists on a single committed date despite the uncertainty? What would you do if one team's estimate turns out to be significantly wrong partway through the project?
