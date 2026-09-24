@@ -1,0 +1,77 @@
+# space-rad-hard — Day 65
+
+## Q1: How would you approach designing a radiation-tolerant, high-reliability power feed for a payload that has two independent 28V bus inputs, where the system must survive a shorted or latched load on one feed without losing the other, and must also handle hot-swap events without disturbing the bus?
+
+**Answer:** I'd treat this as three separable problems — source selection, fault isolation, and inrush management — and make sure the design doesn't let one problem's solution undermine another.
+
+For source selection, the two 28V feeds should be combined through an ORing scheme rather than a simple diode-OR if efficiency matters, but the ORing element itself has to be radiation-considered: an ideal-diode controller with a MOSFET is more efficient than a Schottky but introduces active silicon that can latch up or have its control loop upset. A common approach is a redundant ORing stage where each feed has its own controller, and the controllers are cross-monitored so that a fault in one doesn't silently disable the other. The key architectural point is that the two feeds must not share a single point of failure downstream of the OR — otherwise "redundant feeds" is a fiction.
+
+For fault isolation, each load branch should have its own current-limiting and latch-up protection, typically a foldback current limit or an e-fuse with a defined trip threshold and a retry or latch-off policy. The policy choice matters: a latch-off that requires a command to reset is safer for a critical load but risks losing a load that could have recovered; an auto-retry can oscillate into a persistent fault. I'd usually recommend a limited-retry scheme with a counter, so a transient SEL clears but a hard short eventually latches off and reports. The protection must be per-branch, not per-rail, so a shorted load on one branch doesn't drag the shared rail down and take out unrelated loads.
+
+For hot-swap, the concern is inrush into the load's bulk capacitance when a branch is enabled or when a feed is reconnected. Without control, that inrush can collapse the bus and disturb other loads — exactly the failure mode you're trying to avoid. A hot-swap controller with a controlled slew rate (dV/dt) on the pass FET, plus a SOA-aware current limit during the startup window, keeps the inrush within the bus's tolerance. The pass FET's safe operating area during hot-swap is often the limiting component, so it needs to be sized for the worst-case inrush energy, not just steady-state current.
+
+The cross-cutting concern is that all three mechanisms interact: the ORing controller's response to a feed drop, the branch protection's response to a latch, and the hot-swap controller's response to a re-enable all happen on the same bus, and their time constants have to be coordinated so they don't fight each other. I'd model the bus impedance and the worst-case simultaneous events, and I'd want telemetry on each branch's current and fault state so the system can report which feed or load failed rather than just "power problem."
+
+**Possible follow-ups:**
+- How would you decide between latch-off and auto-retry for a load that's critical but also the most likely to latch up?
+- If the ORing controller itself is a COTS part with no radiation data, how would you qualify or mitigate it?
+
+## Q2: How would you approach selecting and qualifying a voltage supervisor or reset IC for a space-deployed system, given that most commercial parts are not radiation-characterized?
+
+**Answer:** I'd start by being honest about what the part actually has to do, because that determines how much radiation risk is tolerable. A voltage supervisor that only holds a processor in reset during power-up is a very different risk than one that's the sole guardian against a brown-out corrupting non-volatile memory mid-write. The first step is a failure-modes-and-effects pass on the supervisor itself: what happens if its threshold drifts with TID, if its output glitches from an SET, or if it latches up? If the answer is "the processor might come out of reset early," that's a design problem; if the answer is "the processor stays in reset longer," that may be benign.
+
+For selection, I'd look for parts that at least have published single-event and TID data, even if not full QML. Many commercial supervisors have some heavy-ion or proton test data available from the manufacturer or from independent test campaigns, and that's a starting point. If no data exists, I'd consider whether the function can be moved to a rad-hard or rad-tolerant device — for example, using a rad-hard comparator with an external reference and an RC network to build the supervisor function discretely, which gives more control over the radiation-sensitive elements. The trade-off is board area and complexity versus confidence.
+
+For qualification, if the part is going into a critical path and has no data, I'd want to characterize it. That means TID testing at a cobalt-60 source to the mission dose with margin, and if the budget allows, heavy-ion or proton testing for SEE. If full testing isn't feasible, I'd derate aggressively, add external mitigation (a redundant supervisor, or a watchdog that catches the case where the supervisor fails to assert), and document the residual risk explicitly. The worst outcome is a part with no data, no mitigation, and no documentation — that's a latent failure waiting for the mission.
+
+One practical point: supervisors often have an internal reference and a comparator, and the reference is usually the most TID-sensitive element. If the part's threshold is set by an external resistor divider, the drift is dominated by the internal reference, which you can't calibrate out at the system level. That's an argument for either accepting the drift with margin or moving to a topology where the reference is external and rad-hard.
+
+**Possible follow-ups:**
+- How would you structure a limited-budget test campaign to get the most confidence per dollar for a supervisor with no data?
+- If you add a redundant supervisor, how do you combine their outputs without creating a new single point of failure?
+
+## Q3: How would you approach designing a radiation-tolerant analog multiplexer front-end for a space-deployed system, where a single-event transient (SET) on the mux select lines could route the wrong sensor channel to a precision ADC and trigger an incorrect control action?
+
+**Answer:** The core problem is that a wrong channel selection produces a plausible-looking but wrong measurement, which is more dangerous than a missing measurement because the control loop may act on it. So the design has to make wrong-channel selection either impossible or detectable before it causes harm.
+
+On the selection side, the mux address lines are the vulnerable node. An SET there can flip the address for the duration of the transient, and if the ADC samples during that window, you get a corrupted reading attributed to the wrong channel. Mitigations start with latching the address: drive the mux select lines from a register that's only updated at a defined point in the acquisition sequence, so a transient between updates can't change the address. If the register itself is susceptible, TMR on the address register or a redundant address path with a comparator that flags disagreement adds confidence. Some designs use a one-hot address with a validity check — if more than one line is asserted, the mux output is invalid and the reading is discarded.
+
+On the acquisition side, the timing matters. If the ADC samples synchronously with the address update, there's a window where the mux is settling and the address is changing; that window should be excluded from valid sampling. A common approach is to insert a settling delay after the address change and before the ADC conversion starts, and to verify the address is stable during that window. If the system can afford it, reading the same channel twice and comparing catches a transient that occurred during one of the reads.
+
+On the detection side, the system needs a way to know a reading is suspect. That could be a plausibility check — if a temperature reading jumps by an implausible amount in one sample, flag it — or a redundancy check, where a critical channel is read through two independent paths and compared. For a control loop, I'd want the loop to be robust to a single bad sample: rate-limiting the actuator command, or requiring two consecutive consistent readings before acting on a change, so a single SET-induced wrong reading doesn't translate into a wrong action.
+
+The trade-off is latency versus robustness. Every check adds delay, and in a time-sensitive control loop, delay can be as dangerous as a wrong reading. So the design has to be tuned to the loop's actual tolerance — how fast does the actuator need to respond, and how much delay can it absorb before the check is worth it.
+
+**Possible follow-ups:**
+- How would you decide which channels need redundant reads and which can rely on plausibility checks alone?
+- If the mux itself is a COTS part with no radiation data, how would you characterize its SET behavior?
+
+## Q4: You're leading a design review where a junior engineer has proposed a solution you believe is under-margined for the radiation environment. The engineer is confident and has done real work on it. How would you handle the disagreement so that the review stays constructive and the right technical decision gets made?
+
+**Answer:** The first thing I'd do is separate the technical question from the interpersonal one. The engineer has done real work, which means they've thought about the problem and have a rationale — my job is to understand that rationale before I push back, because there's a real chance I'm missing something or they've found a constraint I didn't know about. So I'd start by asking them to walk me through their margin calculation and the assumptions behind it, not to challenge them but to make sure I understand the design as they do.
+
+Once I understand their reasoning, I'd focus the discussion on the specific assumption I think is wrong, rather than on the conclusion. "I think the margin is understated because the worst-case TID drift on this part isn't in the datasheet" is a different conversation than "this design is wrong." It gives the engineer something concrete to respond to and keeps the review about the technical issue. If I have data — a test report, a derating guideline, a previous failure — I'd bring it out, because the goal is to make the decision on evidence, not on seniority.
+
+If we still disagree after that, I'd try to find a way to test the assumption rather than argue about it. Can we run a worst-case analysis? Can we add a monitor to the design that flags if the margin is being consumed? Can we prototype the critical path and measure it? Often the disagreement is really about uncertainty, and reducing the uncertainty resolves it. If we can't resolve it technically, I'd make the call as the lead, but I'd document the reasoning and the residual risk, and I'd make sure the engineer understands that the decision is about the risk, not about their work.
+
+The thing I'd avoid is letting it become adversarial. A design review where the junior engineer feels attacked is a review where they stop raising concerns, and that's a much bigger problem than one under-margined design. I'd also be open to the possibility that I'm wrong — if their analysis holds up, I should change my position, and saying so publicly makes it safe for others to push back too.
+
+**Possible follow-ups:**
+- How would you handle it if the engineer's manager disagreed with your call and backed the engineer?
+- What would you do if the schedule didn't allow time to resolve the uncertainty before the design had to be frozen?
+
+## Q5: How would you approach designing a radiation-tolerant current-sense circuit for a spacecraft power bus, where the sense resistor itself is exposed to radiation and its value may drift over the mission lifetime?
+
+**Answer:** The sense resistor is often treated as a passive, stable element, but in a radiation environment that assumption needs to be checked. The drift mechanisms are TID-induced changes in the resistor's material and construction, and for some technologies, displacement damage. The magnitude depends on the resistor type — thin-film and bulk-metal-foil resistors are generally more stable than thick-film or carbon, but even they can drift, and the drift may be dose-rate dependent (ELDRS-like effects are more associated with semiconductors, but resistor drift can also be non-linear with dose rate).
+
+The first design decision is the sense element itself. I'd choose a resistor technology with known radiation behavior, or if none is available, one with a construction that's inherently stable — bulk metal foil is a common choice for precision current sense because its low temperature coefficient and stable construction tend to correlate with radiation stability, though that's not a guarantee. I'd also derate the resistor's power dissipation well below its rating, because self-heating adds a temperature-dependent drift on top of the radiation drift, and the two can compound.
+
+The second decision is the sensing topology. A high-side sense with a differential amplifier is common, but the amplifier's gain and offset also drift with radiation, so the total error is the sum of the resistor drift and the amplifier drift. If the system needs to maintain accuracy over the mission, I'd consider a topology that's less sensitive to absolute component values — for example, a current-sense transformer for AC or pulsed currents, or a Hall-effect sensor if the field can be managed, though Hall sensors have their own radiation sensitivity. For DC currents, a magnetic sensing approach avoids the sense resistor entirely but introduces its own drift and offset issues.
+
+The third decision is calibration. If the system can calibrate the current sense against a known reference — for example, at a known load condition during commissioning — then the initial value can be corrected, but the drift over the mission can't be calibrated out unless there's a way to re-calibrate in orbit. If there isn't, the design has to budget for the worst-case drift over the mission dose and ensure the accuracy requirement is still met at end of life. That budget has to include the resistor, the amplifier, and the reference, and it has to be based on test data, not on assumptions.
+
+The fourth decision is fault detection. If the current sense is used for protection — overcurrent trip, latch-up detection — then a drift in the sense element could cause a false trip or a missed trip. I'd want a way to detect that the sense circuit is out of range, either by comparing it against a second, independent sense path or by checking that the measured current is consistent with other system telemetry. A protection circuit that silently drifts out of calibration is worse than one that fails loudly.
+
+**Possible follow-ups:**
+- How would you test a sense resistor's radiation drift if the manufacturer has no data and you have limited test budget?
+- If you use a magnetic current sensor instead of a sense resistor, what radiation concerns does that introduce?

@@ -1,0 +1,51 @@
+# protocols — Day 65
+
+## Q1: How would you approach debugging an I2C bus where a slave device holds SDA low after a transaction, preventing any further communication until power is cycled?
+
+**Answer:** This is the classic "stuck bus" condition, and the first step is to distinguish between the two root causes: a slave that is mid-transaction and waiting for clocks it never receives, versus a slave that has genuinely latched into a bad state. The diagnostic sequence starts at the physical layer — scope SDA and SCL simultaneously and confirm which line is actually held low and whether SCL is free. If SDA is low but SCL is idle, the most common cause is that the master was reset or interrupted mid-byte, leaving a slave holding the data line while it waits for the remaining clock pulses to complete the byte. The standard recovery is to bit-bang up to nine clock pulses on SCL with SDA released, which lets the slave finish shifting out its byte and then see a STOP condition. If that clears the line, the fix is to add this recovery routine to the driver's error path rather than treating it as a one-off.
+
+If clocking doesn't free the line, the slave has likely entered an undefined state — often triggered by a glitch, a brownout, or a violation of setup/hold timing — and the only reliable recovery is a hardware reset of that device, either via a dedicated reset pin or by power-cycling its rail through a load switch. The deeper engineering question is why it happened at all: check for missing pull-ups on a segment, marginal rise times that violate the \(V_{IL}\)/\(V_{IH}\) thresholds at the slave, or a slave that doesn't implement clock stretching correctly. In a medical device, the recovery mechanism also has to be safe — you can't just silently reset a sensor mid-measurement without invalidating the reading and notifying the application layer.
+
+**Possible follow-ups:**
+- How would you design the driver so that bus recovery is automatic but doesn't mask a recurring hardware fault?
+- What role does the slave's power-on-reset threshold play in this kind of lockup?
+
+## Q2: You're debugging a CAN-FD network where a node intermittently transitions into error-passive state and then recovers on its own, with no obvious pattern. How would you approach this?
+
+**Answer:** Error-passive is a symptom, not a cause — the node has accumulated enough transmit or receive error counters to cross the threshold, and the fact that it recovers means the counters are decrementing on successful frames. So the investigation is really about finding what's driving the error counter up in bursts. I'd start by capturing the error counters themselves over time, along with the specific error types (bit error, stuff error, CRC error, form error, ACK error), because each points at a different layer. A CRC or stuff error that correlates with a particular frame ID suggests a physical-layer or bit-timing problem on that message. An ACK error suggests the node is transmitting when no other node is listening or the bus is being held in a recessive state by a misconfigured transceiver.
+
+The next layer is bit timing. CAN-FD has separate arbitration-phase and data-phase bit rates, and the sample point and SJW settings have to be consistent across all nodes. A node whose data-phase sample point is slightly off will work fine at low load and fail intermittently as bus traffic and temperature shift the oscillator. I'd verify the oscillator tolerance against the total loop delay and check whether the node uses a crystal or an internal RC — an RC source is a common culprit for exactly this kind of temperature- or age-dependent drift. I'd also look at bus topology: stub length, termination, and whether the node sits at the end of a long stub where reflections corrupt the data phase specifically. Finally, I'd check whether the node is being asked to transmit during arbitration windows where a higher-priority node is already active, since losing arbitration repeatedly can also push the error counters up if the node misinterprets the loss.
+
+**Possible follow-ups:**
+- How would you distinguish a bit-timing problem from a physical-layer reflection problem using only the error counter data?
+- What would you change in the network design to make a single marginal node less likely to disrupt the whole bus?
+
+## Q3: How would you approach implementing flow control on a UART link where the receiver occasionally cannot keep up with the transmitter, but the protocol has no built-in backpressure mechanism?
+
+**Answer:** The first question is whether the link has hardware flow control pins available. If RTS/CTS are wired, the cleanest solution is to enable hardware flow control and let the receiver deassert RTS when its FIFO crosses a high-water mark — this is deterministic and doesn't depend on the transmitter parsing anything. If the pins aren't available, the fallback is software flow control using XON/XOFF, but that only works if the payload is text-safe and the protocol can reserve those byte values; in a binary medical protocol, XON/XOFF is usually a non-starter because the data can contain those values.
+
+If neither is possible, the real fix is architectural: add a length-prefixed framing layer with a sequence number and an application-level ACK, so the receiver can NACK or simply not ACK when its buffer is full, and the transmitter retransmits. That converts an unbounded overrun into a bounded, recoverable condition. Alongside that, I'd size the receive buffer against the worst-case burst — the transmitter's maximum frame size times the number of frames it can send before the receiver's task gets scheduled — and make sure the ISR drains the hardware FIFO into that buffer quickly, leaving the parsing to a lower-priority task. If the receiver still can't keep up, the honest answer is that the baud rate or the processing budget is wrong for the workload, and that's a system-level decision rather than a firmware patch.
+
+**Possible follow-ups:**
+- How would you choose the high-water and low-water marks for RTS/CTS to avoid oscillation?
+- What's the trade-off between adding an ACK layer and simply increasing the baud rate?
+
+## Q4: You're designing a system where an SPI master needs to communicate with three slaves, each requiring different clock polarity and phase settings. How would you approach the hardware and firmware architecture?
+
+**Answer:** The core constraint is that CPOL and CPHA are properties of the master's SPI peripheral configuration, not of the individual slave, so the master has to reconfigure between transactions. That's fine as long as the reconfiguration is done safely — the sequence is: assert the target slave's chip select, configure the peripheral for that slave's mode and clock rate, run the transfer, deassert chip select, and only then reconfigure for the next slave. The critical rule is that no other slave's chip select may be asserted while the mode is being changed, because a slave that sees clocks in the wrong mode can misinterpret them as a valid transaction and drive MISO, causing contention.
+
+On the hardware side, I'd give each slave an independent chip select rather than trying to daisy-chain, because daisy-chaining requires all devices to share the same mode and to be able to pass data through, which these don't. I'd also check whether any slave has a minimum time between chip-select deassert and the next assert, and whether any slave requires the clock to be idle in a particular state between transactions — some devices are sensitive to the clock line glitching during reconfiguration. In firmware, I'd wrap this in a small SPI abstraction that takes a device handle carrying its mode, clock rate, and CS pin, so the application never touches the peripheral registers directly. That keeps the mode-switching logic in one place and makes it testable.
+
+**Possible follow-ups:**
+- What would you do if one slave's datasheet specifies a mode that the master peripheral doesn't support directly?
+- How would you verify on a scope that the mode change isn't producing spurious clocks?
+
+## Q5: Imagine you're leading a design review where a junior engineer proposes using a single shared interrupt line for three different peripherals — a UART, an SPI sensor, and a GPIO alarm input — arguing that it saves pins and the firmware can just poll the peripherals to find out which one fired. How would you guide the team to evaluate this approach?
+
+**Answer:** I'd start by acknowledging the legitimate motivation — pin count matters, especially on a small package — and then walk through the failure modes rather than just rejecting it. The first issue is latency: with a shared line, the ISR has to poll three peripherals to find the source, and the worst case is that the alarm input is serviced after the UART and SPI checks. In a medical device, an alarm input is exactly the kind of signal where you don't want its latency to depend on how many other peripherals happen to be active. The second issue is that polling a peripheral's status register to clear its interrupt can have side effects — reading a UART's data register to clear its interrupt consumes the byte, and reading an SPI status register may clear a flag you needed. So the "just poll" approach isn't free.
+
+I'd then ask the team to quantify the actual pin savings and compare it against the cost: a shared interrupt line typically needs a small amount of glue logic or a dedicated interrupt-status register to make it deterministic, and if you're adding that, you've spent the pins you saved. The better options are usually to use a GPIO expander or an interrupt controller with per-source status bits, or to accept that the alarm input gets its own dedicated interrupt while the UART and SPI share one, since those two are less latency-critical and their status registers are designed to be polled. The point of the review isn't to win the argument — it's to get the team to state the latency budget for each source and design to it.
+
+**Possible follow-ups:**
+- How would you structure the ISR so that a shared line doesn't cause a missed interrupt under heavy load?
+- What would you document in the design file to justify the final interrupt allocation for a regulatory submission?
