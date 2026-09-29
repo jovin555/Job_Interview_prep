@@ -1,0 +1,61 @@
+# tools — Day 70
+
+## Q1: How would you approach setting up a test and measurement bench for bring-up of a new mixed-signal medical device prototype, deciding which instruments to dedicate versus share, and how would you keep the setup repeatable across multiple engineers?
+
+**Answer:** I'd start by mapping the bring-up plan to instrument needs rather than buying or booking gear generically. The first pass is a signal inventory: what rails need to be sequenced and measured (a bench supply with logging per rail, or a DC electronic load for battery emulation), what analog nodes need low-noise characterization (a mixed-signal oscilloscope with adequate resolution and a low-noise front end), what digital buses need decode (a logic analyzer or MSO with protocol decoders for I2C/SPI/UART/CAN-FD), and what RF/EMI work is anticipated (a spectrum analyzer with near-field probes, ideally booked rather than owned if it's only used at pre-compliance milestones).
+
+The dedicate-versus-share decision usually comes down to three factors: how often the instrument is touched during a typical bring-up day, whether moving it breaks calibration or setup state, and whether contention would block parallel work. A scope and a bench supply at each engineer's station tend to pay for themselves because they're used constantly and re-setup is disruptive. A spectrum analyzer, thermal chamber, or precision DMM with recent calibration is usually better shared with a booking system, because the cost per use is high and the setup is more involved.
+
+For repeatability across engineers, I'd standardize on a few things: a documented probe kit per station (matched passive probes, a ground-spring set, differential probes where needed), a saved-state convention on the scope (channel scaling, trigger setup, decode config) checked into a shared repo so anyone can recall the same measurement, and a simple bench log or wiki page per board that records firmware revision, harness wiring, and any non-default instrument settings. The goal is that a second engineer can reproduce a measurement without re-deriving the setup.
+
+**Possible follow-ups:**
+- How would you decide when a measurement is trustworthy enough to act on versus when you need to re-measure with a different instrument?
+- What would you do if two engineers needed the same shared instrument at the same time during a critical bring-up window?
+
+## Q2: How would you approach configuring a Segger J-Link for a Zephyr RTOS target where an automated test harness needs to flash the device, run a test sequence, and capture a crash dump without manual intervention — and what failure modes would you design around?
+
+**Answer:** The core idea is to treat the debug probe as a scriptable resource, not a manual tool. J-Link ships with a command-line utility and a scripting interface that can be driven from a host-side test runner, so the harness can issue a flash-and-reset, then hand off to the target's own test firmware or to a GDB session for symbol-aware inspection. For Zephyr specifically, the build system already knows how to produce the artifacts the probe needs (the ELF, the hex/bin, and the debug symbols), so the harness can consume those directly rather than re-deriving paths.
+
+The sequence I'd design is roughly: reset and halt, erase and program, verify, reset and run, wait for a test-complete signal (a UART line, a GPIO toggle, or a semihosting message), then on failure, halt and dump the relevant memory regions — the fault status registers, the stacked frame, and the RTOS thread state. For a hard fault on Cortex-M, the stacked PC/LR and the CFSR/HFSR registers are the first things to capture, because they tell you whether it was a bus fault, a usage fault, or an escalation from a configurable fault. Zephyr's fatal error handler can be configured to park in a known state, which makes the dump deterministic.
+
+Failure modes I'd design around: the probe losing sync if the target is in a low-power state or has the debug clock gated; the flash operation timing out because the target is held in reset by an external supervisor; the harness racing the target's own bootloader if there's one in the chain; and the debug connection itself perturbing the system under test (for example, a SWD line shared with a GPIO that the firmware drives). For each, the mitigation is usually a documented recovery step — a connect-under-reset option, a longer timeout, a hardware jumper to isolate the debug lines, or a dedicated test firmware image that doesn't touch the shared pins.
+
+**Possible follow-ups:**
+- How would you distinguish a genuine firmware crash from a debug-probe-induced halt when the harness reports a failure?
+- What would you change in the harness if the target needed to be tested across multiple hardware revisions with different memory maps?
+
+## Q3: How would you approach setting up a power integrity simulation workflow for a mixed-signal PCB where a high-current switching regulator and a precision analog front-end share the same power distribution network, and how would you decide which results are trustworthy enough to act on?
+
+**Answer:** The first step is to define what question the simulation is actually answering. For a shared PDN, the interesting questions are usually: how much ripple from the switcher reaches the analog supply pins, where the impedance peaks are on the PDN across frequency, and whether the decoupling network is doing what the schematic intends. Those are different analyses — a time-domain transient for ripple propagation, a frequency-domain impedance sweep for the PDN, and a decoupling study for the capacitor network — and trying to answer all three with one model usually produces a model that's wrong for at least two of them.
+
+For the model itself, I'd start with a simplified but honest representation: the regulator's output impedance and switching behavior, the trace and plane parasitics between the regulator and the analog load, the decoupling capacitors with their ESR and ESL, and the load current profile of the analog front-end. The temptation is to over-model — every via, every trace segment — but at the frequencies that matter for a switcher's ripple and its harmonics, the dominant parasitics are usually the bulk capacitor ESL, the plane spreading inductance, and the via inductance at the load. Getting those roughly right matters more than getting every trace segment exact.
+
+Deciding which results to trust comes down to a few checks. First, does the model reproduce a measurement you already have — for example, the regulator's output ripple on a bench setup? If the simulation and the bench disagree by more than a small factor, the model is missing something. Second, does the result change qualitatively when you perturb a parameter you're unsure about? If the answer flips between "fine" and "problem" based on a capacitor ESL you guessed, the simulation isn't yet trustworthy enough to act on. Third, does the result match the direction and rough magnitude of a simpler hand calculation — a rough ripple estimate, a rough impedance estimate? If the simulation says something wildly different from the back-of-envelope, that's a signal to investigate the model, not to trust the simulation.
+
+**Possible follow-ups:**
+- How would you validate a PDN impedance simulation against a real measurement, and what would you do if they disagreed?
+- What would you change in the workflow if the analog front-end were on a separate board connected by a cable?
+
+## Q4: How would you approach setting up a cross-probe workflow between OrCAD Capture and Cadence Allegro so a layout review can move efficiently between schematic and PCB, and what would you check to confirm the link actually works before relying on it in a review?
+
+**Answer:** Cross-probing is one of those features that looks trivial until it silently fails mid-review, so I'd treat it as something to verify, not assume. The setup itself is usually a matter of having both tools open on the same design database, with the cross-probe option enabled in each, and the design synchronized so that the netlist and the layout agree on reference designators and net names. The most common reason it breaks is a mismatch between the schematic and the layout — a part that was added in the schematic but not yet annotated into the layout, or a net that was renamed on one side.
+
+Before relying on it in a review, I'd run a short checklist: select a known component in the schematic and confirm it highlights in the layout; select a net and confirm the same net highlights on both sides; try a cross-probe in the reverse direction; and check that the highlight is visible against the current display state (a highlight on a layer that's turned off looks like nothing happened). I'd also confirm that the design is in a state where cross-probing is meaningful — if the layout is mid-edit with unrouted nets, some highlights won't behave as expected.
+
+In the review itself, the value of cross-probing is that it lets the group move between "what does the schematic say this net should do" and "what does the layout actually do with it" without anyone having to manually search. That's especially useful for reviewing things like decoupling placement, where the schematic shows the intent and the layout shows the reality, and for tracing a signal from a connector pin through to the component it feeds.
+
+**Possible follow-ups:**
+- What would you do if cross-probing worked for components but not for nets, or vice versa?
+- How would you keep the schematic and layout synchronized during a review where changes are being proposed?
+
+## Q5: (Behavioral) Imagine you're leading a project where a junior engineer has set up the Altium Designer output job configuration for a medical device PCB release, and you discover the fabrication outputs are missing the drill table and the assembly drawings reference an outdated revision of the schematic. The board house is expecting the files tomorrow, and the engineer is confident the outputs are complete because "the Gerbers look fine." How would you handle this situation?
+
+**Answer:** The first thing I'd do is separate the immediate problem from the process problem, because they need different responses. The immediate problem is that the release package is incomplete and the board house is expecting it tomorrow. The process problem is that the output job configuration allowed an incomplete package to be generated and reviewed as if it were complete.
+
+For the immediate problem, I'd verify the gap myself rather than take either the engineer's confidence or my own first impression at face value — open the output job, check which outputs are actually configured, and confirm what's missing against the release checklist. If the drill table is simply not included in the job, that's usually a quick fix: add the output, regenerate, and re-verify. The assembly drawing referencing an outdated schematic revision is more serious, because it suggests the drawing was generated from a stale source rather than the current design. I'd want to know which revision it actually reflects before deciding whether to regenerate it or to investigate whether the schematic itself has uncommitted changes.
+
+Once the package is corrected, I'd communicate clearly with the board house about the revised delivery, and I'd avoid framing this as the junior engineer's failure. The more useful framing is that the output job configuration didn't enforce the completeness we needed, and that's a process gap the team owns. The fix is usually to make the release checklist explicit — a documented set of outputs that must be present, with a verification step that checks each one against the current design revision — and to have someone other than the person who generated the package do that verification. That's a normal part of a regulated release process, not a punishment.
+
+**Possible follow-ups:**
+- How would you structure the release checklist so that it catches this kind of gap without becoming a bureaucratic burden?
+- What would you do if the board house had already started fabrication based on the incomplete package?
