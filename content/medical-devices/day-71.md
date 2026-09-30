@@ -1,0 +1,69 @@
+# medical-devices — Day 71
+
+## Q1: How would you approach designing the patient leakage current measurement path for a device that has both BF-type and CF-type applied parts, and how would you decide which measurements are actually required?
+
+**Answer:** The starting point is to read the applied-part definitions and the measurement network requirements directly out of IEC 60601-1 rather than working from memory, because the limits, the test conditions, and the measurement network all differ by classification and by whether you're in normal condition (NC) or single-fault condition (SFC). A CF-type applied part carries a much tighter patient leakage limit than a BF-type part, so the two cannot share a single pass/fail number — you have to build a measurement matrix where each applied part is tested against its own classification, under both NC and SFC, and with the device configured in each of its relevant operating modes.
+
+Practically, I'd build the measurement path around the standard's specified measuring device (the passive network that models the impedance the standard wants you to present to the applied part), and I'd treat the measurement setup itself as something to be validated before trusting any number. That means: verify the network components are within tolerance, confirm the meter's input impedance and bandwidth are appropriate for the frequencies involved, and check that the reference earth and the device's earth reference are connected exactly as the standard requires. A surprising fraction of "failures" at this stage turn out to be setup errors — a floating earth, a meter with the wrong input impedance, or a return path that doesn't match the figure in the standard.
+
+For deciding which measurements are required: I'd enumerate every applied part, classify each one, then for each classification list the leakage currents the standard requires (patient leakage, patient auxiliary current, and where applicable earth leakage and enclosure leakage), and cross-reference against the device's intended use and its operating modes. Applied parts that are not simultaneously accessible may allow some measurements to be combined or omitted per the standard's rules, but I would not make that call by intuition — I'd confirm it against the clause and document the rationale, because that rationale is exactly what a reviewer will ask for later.
+
+The design implication is that the measurement path has to be planned at the schematic and layout stage, not bolted on at test time. If the isolation barrier, the return paths, and the reference points aren't laid out so that each applied part can be isolated and measured independently, you end up cutting traces on a prototype to get a valid measurement — which is both slow and a source of doubt about whether the measurement reflects the real device.
+
+**Possible follow-ups:**
+- If a device has a BF-type and a CF-type applied part that are simultaneously accessible to the patient, how does that change your measurement plan?
+- How would you decide whether a leakage current result that's close to but under the limit is acceptable, versus something that needs design margin added?
+
+## Q2: During IEC 60601-1-2 immunity testing, a device passes radiated RF immunity at most frequencies but shows a reproducible malfunction in a narrow band around one specific frequency. How would you approach diagnosing and resolving it?
+
+**Answer:** A narrow-band, reproducible failure is actually a gift compared to an intermittent one, because reproducibility means you can bisect the problem systematically. The first thing I'd do is characterize the failure precisely before touching the design: sweep finely around the failing frequency to find the exact center and the bandwidth over which it fails, then vary the field orientation, the cable routing, and the device's operating mode to see which of those change the failure threshold. That characterization usually tells you whether you're looking at a resonance (frequency-selective, orientation-sensitive) or a demodulation/rectification effect (broadband, but only manifesting in a sensitive node).
+
+If it looks like a resonance, the suspects are typically cable harnesses acting as antennas, enclosure seams or apertures near a quarter-wavelength of the failing frequency, or a resonant structure on the PCB itself — a long trace, a connector pin field, or a poorly referenced plane split. I'd use a near-field probe to hunt for where the RF energy is actually coupling in, and I'd compare the failing frequency against the physical dimensions in the system to see which structures are plausible resonators. That comparison often narrows the search dramatically before any lab time is spent.
+
+Once I know the coupling path, the fix is usually one of: breaking the antenna (shortening or rerouting the harness, adding a common-mode choke or ferrite at the right point), improving the reference (stitching, fixing a plane split, adding a local ground reference at the sensitive node), or hardening the victim (adding filtering or hysteresis at the input that's being disturbed, or making the firmware tolerant of a transient glitch on that input). I'd prefer to fix the coupling path rather than only hardening the victim, because hardening the victim without understanding the coupling tends to move the failure to a different frequency rather than eliminate it.
+
+One important point: I'd want to understand *why* the malfunction occurs, not just make it stop. If the disturbed signal is a sensor input, the correct response might be a firmware-level plausibility check or a filter, but if it's a control or safety-related signal, the fix has to be at the hardware level or the risk analysis has to be revisited. The resolution and the risk file need to stay consistent.
+
+**Possible follow-ups:**
+- How would you decide whether the fix belongs in hardware or firmware, and how does that decision interact with the risk management file?
+- If the failing frequency sits right at a frequency the device also uses for communication, how does that change your approach?
+
+## Q3: How would you approach structuring a risk management file so that it stays useful and auditable throughout a project, rather than becoming a document assembled at the end?
+
+**Answer:** The failure mode I want to avoid is the risk file that gets written backwards from the finished design — where someone reverse-engineers hazards from what the device already does, and the file becomes a compliance artifact rather than a design tool. The way to avoid that is to make the risk file a living document that's updated at the same cadence as the design, with each hazard traceable to a design decision, a verification activity, and a residual-risk judgment.
+
+Structurally, I'd organize it around the ISO 14971 process rather than around the device's subsystems: risk management plan, hazard identification and risk estimation, risk control, residual risk evaluation, and the production/post-production feedback loop. Each hazard gets an entry that records the hazardous situation, the foreseeable sequence of events, the severity and probability estimates with the rationale for those estimates, the risk control measure chosen, how that control is verified, and the residual risk after the control. The rationale column is the one that matters most in an audit — a reviewer wants to see *why* a probability was estimated as it was, not just the number.
+
+To keep it maintainable, I'd tie each hazard to the design inputs and outputs it touches, so that when a design change happens, the affected hazards surface automatically rather than being missed. That's the same traceability discipline as the DHF, and in practice the two documents should reference each other rather than duplicate each other. I'd also keep a running log of risk-related decisions made in design reviews, because those decisions are often where the real risk reasoning happens and it's easy to lose them if they only live in meeting minutes.
+
+The other discipline that keeps it honest is treating the risk file as an input to design reviews, not an output. If a design review opens with "here are the hazards this change affects and how the residual risk changes," the file stays current by construction. If it opens with "here's the change, we'll update the risk file later," it doesn't.
+
+**Possible follow-ups:**
+- How would you handle a hazard where the risk estimate is uncertain because there's little field data to base probability on?
+- What would you do if a design change late in the project invalidated a risk control that had already been verified?
+
+## Q4: How would you approach deciding whether a given software failure in a medical device should be classified as a safety-related failure requiring formal risk controls, versus a non-safety usability or reliability issue?
+
+**Answer:** The classification should follow from the hazard analysis, not from how the failure feels. The question I'd ask is: if this software failure occurs, can it contribute to a hazardous situation — either directly (the failure causes an incorrect output that reaches the patient) or indirectly (the failure causes the device to stop monitoring, to display stale data as if it were live, or to suppress an alarm)? If the answer is yes, it's safety-related and it needs a risk control, regardless of how unlikely or how minor the failure seems.
+
+The trap is classifying by severity of the *failure* rather than severity of the *hazard*. A cosmetic display glitch and a failure to update a displayed value can look similar in a bug tracker, but the second one can lead a clinician to act on stale information, which is a genuine hazard. So the classification has to be done by someone who understands the clinical use, and it has to be documented with the reasoning — "this failure is non-safety because the worst-case outcome is X, and X does not lead to patient harm because Y."
+
+There's also a category that's easy to miss: failures that don't cause harm directly but degrade the device's ability to detect a hazard. A failure in a self-test routine, a watchdog, or an alarm-path check doesn't harm the patient by itself, but it removes a layer of protection. Those belong in the risk analysis too, because the risk file is about the device's overall safety posture, not just about the primary function.
+
+Once something is classified as safety-related, the controls follow from the software safety classification under IEC 62304 and from the risk analysis — which might mean architectural separation, defensive checks, independent monitoring, or verification at a higher rigor. The classification decision and the control decision should be made together, because the classification is only useful if it drives what you actually do.
+
+**Possible follow-ups:**
+- How would you handle a disagreement between the software team and the quality team about whether a particular failure is safety-related?
+- If a failure is classified as non-safety, what documentation would you want to keep to justify that decision later?
+
+## Q5: You're the lead engineer on a project where the clinical team has requested a usability change late in development that would require a hardware revision and push the regulatory submission out by several months. How would you evaluate and respond to the request?
+
+**Answer:** The first thing I'd do is separate the *clinical need* from the *proposed implementation*. The clinical team is telling me something is wrong or missing in the current design; the hardware revision is one way to address it, but it may not be the only way. So I'd want to understand the underlying problem — what task is hard, what error is the clinician making, what's the actual workflow that's breaking down — before accepting that a hardware revision is the answer. Sometimes the fix is firmware, sometimes it's labeling or training, sometimes it's a small mechanical change that doesn't touch the PCB, and sometimes it genuinely is a hardware revision. The point is not to accept the proposed solution as the requirement.
+
+If it does require a hardware revision, I'd want to quantify the impact honestly: what's the actual schedule slip, what's the regulatory impact (does it invalidate any completed testing, does it change the submission), what's the cost, and what's the risk of *not* making the change. That last one is the one that's easy to underweight. If the usability issue is a use error that could lead to patient harm, then "we'll fix it in the next revision" is not an acceptable answer, and the schedule slip is the cost of doing it right. If it's a preference or a convenience improvement, then the trade-off is genuinely a trade-off and the decision belongs with the product owner, not with engineering alone.
+
+My response would be to bring the decision to the right forum with the facts laid out: the clinical need, the options for addressing it, the cost and schedule of each, and the risk of each. I'd give a clear engineering recommendation, but I'd be explicit that the decision to slip the submission is a business decision that needs the product owner and regulatory to sign off on, because it affects commitments beyond engineering. What I would not do is either silently absorb the change and let the schedule slip without anyone deciding, or refuse it on schedule grounds without understanding the clinical need.
+
+**Possible follow-ups:**
+- If the change is deferred to a future revision, how would you make sure the clinical need is tracked and not lost?
+- How would you handle it if the clinical team and the product owner disagreed about whether the change is necessary?
