@@ -1,0 +1,61 @@
+# risk-requirements-traceability — Day 74
+
+## Q1: How would you approach tracing a risk control measure whose effectiveness depends on a *sequence* of events rather than a single action — for example, a control that requires the system to detect a fault, log it, notify the user, and then enter a safe state, where each step is owned by a different subsystem?
+
+**Answer:** The key insight is that a sequence-based control is not one control — it is a chain of sub-controls, and the hazard is only mitigated if *every* link in the chain executes in the right order and within the right time. So the first thing I'd do is decompose the sequence into its constituent steps and treat each step as its own traceable element, while also creating a parent traceability entry that represents the end-to-end behavior.
+
+Concretely, I'd model it as a layered trace: at the top, a single risk control measure in the risk management file (e.g., "system shall transition to safe state on fault detection"). Beneath it, a set of derived requirements — one per step — each with its own owner, acceptance criteria, and verification activity. The parent control is then traced to an *integration* verification that exercises the whole sequence, not just the individual steps. This matters because a chain of individually-passing steps can still fail as a sequence: the fault detection might fire but the notification might block the safe-state transition, or the logging might introduce latency that blows the timing budget.
+
+I'd also make the ordering explicit as a requirement in its own right — "step N shall complete before step N+1 begins" — because otherwise each subsystem team will verify their step in isolation and nobody will own the sequencing. And I'd want the integration test to include fault injection at each step, so we can confirm that a failure anywhere in the chain still results in the safe state being reached (or a defined degraded behavior).
+
+**Possible follow-ups:**
+- If the logging step is non-safety-critical but sits in the middle of the sequence, how would you decide whether it belongs in the safety chain at all, or whether it should be moved off the critical path?
+- How would you handle the case where two steps are owned by the same team but implemented in different firmware modules — does that change how you structure the traceability?
+
+## Q2: How would you approach establishing traceability between risk control measures and requirements when the same risk control measure is implemented differently across multiple product variants or hardware revisions?
+
+**Answer:** This is fundamentally a problem of separating the *intent* of a control from its *implementation*. The risk analysis should describe the control in terms of the hazard it mitigates and the outcome it must achieve — not the specific mechanism. So the risk management file entry stays stable across variants, and each variant's SRS carries its own requirement that implements that intent in whatever way is appropriate for that variant.
+
+I'd structure the traceability so that the risk control measure is the common ancestor node, and each variant's requirement is a child of it. That way, when you run a coverage report, you can see at a glance that variant A satisfies the control with a hardware watchdog and variant B satisfies it with a firmware watchdog, and both trace back to the same hazard. The verification activities also branch per variant, because the test for a hardware watchdog is not the same as the test for a firmware watchdog — even though both are verifying the same control intent.
+
+The practical risk here is *drift*: over time, one variant's implementation gets updated and the other doesn't, and the shared risk control entry becomes misleading. So I'd want a periodic reconciliation step — a review that walks the risk control measures and confirms that every active variant still has a valid, verified implementation. I'd also want the variant-specific requirements to carry a reference back to the parent control ID, not just a free-text note, so the link is machine-checkable rather than relying on someone remembering.
+
+**Possible follow-ups:**
+- If a new variant is introduced that mitigates the hazard by an entirely different principle (e.g., eliminating the hazard rather than controlling it), how would you represent that in the traceability structure?
+- How would you handle the case where one variant's implementation is later found to be inadequate — does that invalidate the shared risk control entry for all variants?
+
+## Q3: How would you approach handling a situation where a risk control measure is traced to a verification activity, but the verification activity is a *manual* test with no automated logging — the operator toggles a signal and observes an LED — and the risk file treats it as objective evidence?
+
+**Answer:** The core issue is whether the evidence is *objective* and *reproducible*, not whether it's automated. A manual test can be perfectly valid objective evidence if it has a defined procedure, a defined acceptance criterion, and a record of the result that a third party could audit. The problem with "operator toggles a signal and observes an LED" is usually not that it's manual — it's that the acceptance criterion is subjective ("the LED came on") and the record is often just a checkbox.
+
+So my approach would be to tighten the test rather than automatically replace it. First, define what "the LED came on" actually means in measurable terms — for example, the LED illuminates within a specified time after the signal is applied, and the operator confirms this against a stopwatch or a timestamped video. Second, require a record that captures the actual observation, not just a pass/fail mark — a photo, a timestamped log entry, or a note of the measured time. Third, if the control is safety-critical and the manual test is the *only* evidence, I'd push to add an instrumented measurement alongside it — even something as simple as a scope capture or a GPIO log — so there's a machine-recorded trace that corroborates the operator's observation.
+
+The judgment call is proportionality: for a low-severity control, a well-documented manual test may be entirely sufficient. For a high-severity control, I'd want the evidence to be strong enough that a reviewer who wasn't present could independently confirm the result. The risk file should reflect that distinction rather than treating all manual tests as equally weak or equally strong.
+
+**Possible follow-ups:**
+- If the manual test is the only practical way to verify the control (e.g., because the signal is only accessible by physically probing a test point), how would you strengthen the evidence without redesigning the hardware?
+- How would you handle a situation where the operator's observation is correct but the test procedure doesn't specify the acceptance criterion precisely enough for another operator to reproduce it?
+
+## Q4: How would you approach deciding whether a risk control measure should be traced to a *design requirement*, a *design element*, or *both* — and what practical difference does that distinction make in a traceability matrix?
+
+**Answer:** The distinction matters because requirements and design elements answer different questions. A requirement says *what the system must do*; a design element says *how it does it*. A risk control measure can be expressed at either level, and the right choice depends on whether the control is behavioral or structural.
+
+If the control is behavioral — "the system shall disable the motor output within 100 ms of detecting an over-temperature condition" — it belongs as a requirement, because it describes an observable behavior with a measurable acceptance criterion. If the control is structural — "the enclosure shall provide a creepage distance of at least X mm between the mains and the patient-connected circuit" — it's really a design constraint, and it may be more naturally traced to a design element (the PCB layout, the enclosure geometry) than to a behavioral requirement. In practice, most controls need *both*: a requirement that states the intent, and a design element that implements it, with the traceability matrix showing the link between them.
+
+The practical difference shows up in coverage reporting. If you only trace to requirements, you can confirm that every control has a stated behavior, but you can't confirm that the design actually implements it. If you only trace to design elements, you can confirm that something exists, but you can't confirm that it was specified or verified against a measurable criterion. Tracing to both gives you a complete chain: hazard → risk control → requirement → design element → verification. That chain is what an auditor or a reviewer actually needs to follow.
+
+**Possible follow-ups:**
+- If a design element implements multiple requirements, how would you represent that in the matrix without creating a many-to-many mess that's hard to audit?
+- For a control that is implemented purely through component selection (e.g., choosing a higher-rated capacitor), is there a meaningful "design element" to trace to, or does the requirement itself carry the whole trace?
+
+## Q5: (Behavioral) Imagine you're leading a project where the risk management file lists a risk control measure, the SRS contains a requirement that implements it, and the verification plan contains a test that verifies the requirement — but when you trace the links, you find that the requirement was written by the systems engineer, the test was written by the test engineer, and neither of them has ever read the risk analysis entry that justifies the control. The links exist on paper, but the *intent* of the control has been lost between the documents. How would you handle this?
+
+**Answer:** This is a classic case of traceability existing as a paperwork exercise rather than as a shared understanding. The links are technically present, so a naive audit would pass — but the control's *purpose* has been lost, which means the requirement and the test may not actually address the hazard they're supposed to mitigate. The first thing I'd do is not blame anyone, because this is a process failure, not an individual one. The systems engineer and test engineer were each doing their job within the information they had.
+
+My approach would be to close the loop in three steps. First, I'd walk the specific control in question — bring the systems engineer, the test engineer, and whoever owns the risk analysis entry into the same conversation, and read the risk analysis entry aloud together. The goal is to establish a shared understanding of what hazard is being mitigated and what "the control works" actually means. Second, I'd check whether the requirement and the test still make sense in light of that understanding. Often they will, but sometimes you find that the requirement was written to a slightly different interpretation, or the test exercises a condition that isn't the one the risk analysis cares about. Third, I'd fix the *process* so this doesn't recur: the most effective mechanism I've seen is requiring that the risk analysis entry be referenced by ID in the requirement itself, and that the test procedure include a short "hazard context" section explaining what failure condition the test is meant to exercise. That way, the intent travels with the artifact.
+
+Longer term, I'd want the risk management review to include a sampling check — pick a few controls at random and ask the requirement author and test author to explain, in their own words, what hazard the control mitigates. If they can't, the traceability is nominal, not real.
+
+**Possible follow-ups:**
+- If the requirement and test turn out to be technically correct but the *intent* was never documented anywhere, how would you retroactively capture that intent without rewriting the whole risk file?
+- How would you scale this kind of intent-check across a large project where there are hundreds of controls, without turning it into a full-time review activity?

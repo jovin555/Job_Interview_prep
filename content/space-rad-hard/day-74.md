@@ -1,0 +1,87 @@
+# space-rad-hard — Day 74
+
+## Q1: How would you approach designing a radiation-tolerant, high-reliability power feed for a payload that has two independent 28V bus inputs, where the system must survive a shorted or latched load on one feed without losing the other, and must also handle hot-swap events without disturbing the bus?
+
+**Answer:** I'd treat this as three separable problems — input ORing, fault isolation, and inrush management — and make sure the design of each doesn't undermine the others.
+
+For the two independent feeds, the first decision is whether to OR them passively or actively. Passive ORing with Schottky diodes is simple and inherently fail-safe, but the forward drop and the associated power dissipation are usually unacceptable at 28V bus currents. An active ORing scheme using ideal-diode controllers with back-to-back MOSFETs gives low drop and, critically, allows the controller to turn the FET off in the reverse direction — which is what actually isolates a faulted feed. A single MOSFET body diode would conduct in reverse and defeat the isolation, so back-to-back devices (or a topology with controlled reverse blocking) are essential.
+
+Fault isolation is where the "shorted or latched load on one feed" requirement lives. Each feed needs its own current-limiting or e-fuse stage, sized so that a hard short on one branch trips that branch's protection without dragging the shared rail down. I'd want the protection to be latching rather than auto-retry for a hard short, with a defined retry policy (e.g., limited retries with backoff) so a persistent fault doesn't cause the system to oscillate. The trip threshold and response time need to be chosen so normal load transients don't nuisance-trip, but a genuine latch-up event is caught before it damages the upstream bus or the other feed.
+
+Hot-swap is the third leg. When a load is plugged in, the input capacitance looks like a short until it charges, so I'd use a hot-swap controller with a controlled slew rate on the pass FET's gate, plus a programmed current limit and a timer that distinguishes a legitimate inrush from a fault. The key is that the inrush current must stay below the upstream bus's own protection threshold, otherwise plugging in a load trips the whole bus. I'd also add reverse-current protection so a faulted downstream load can't back-feed the bus.
+
+Throughout, I'd be thinking about single points of failure. If both feeds share a common ORing controller or a common sense resistor, that part becomes a single point of failure for the whole payload. Where the criticality justifies it, I'd duplicate the ORing and protection paths so a fault in one feed's control circuitry can't take down the other. And I'd derate everything — MOSFETs, sense resistors, controllers — for the vacuum thermal environment, because a part that's fine on a bench at 25°C may be at its limit when the only heat path is conduction to a chassis.
+
+**Possible follow-ups:**
+- How would you decide between a latching and an auto-retry protection scheme for a load that might experience a transient fault versus a hard short?
+- If the two feeds come from the same upstream source, does the "independent" requirement still buy you anything, and how would you handle that?
+
+## Q2: How would you approach designing a latch-up protection scheme for a mixed-signal board where the sensitive analog front-end and the digital processing section share a common 3.3V rail, and a single-event latch-up in either section could drag the whole rail down?
+
+**Answer:** The core problem is that a shared rail turns a local latch-up into a system-level event, so the first move is to stop treating the rail as one domain. I'd split the 3.3V into separately protected branches — one for the analog front-end, one for the digital section — each with its own current-limiting or e-fuse stage, fed from a common upstream source. That way a latch-up in the digital section trips its branch and the analog front-end keeps running, and vice versa. The split has to be done carefully: the analog branch needs its own filtering and its own return path so the digital branch's fault current doesn't couple into it.
+
+For the protection itself, I'd use a current-limited switch rather than a simple fuse, because a fuse is one-shot and you want the system to be able to recover. The switch needs a current limit set above the worst-case legitimate load but below the level that would damage the rail or the upstream converter, and it needs a fast enough response to catch the latch-up before the rail collapses. The tricky part is the response time versus nuisance-trip trade-off: too fast and normal load steps trip it, too slow and the rail sags enough to reset everything. I'd characterize the load profile and set the limit with margin, then verify with a controlled overcurrent injection during bring-up.
+
+Detection is as important as protection. A latch-up event has a signature — a sudden current step with a rail sag — and I'd want the system to log it, because a latch-up that trips protection is a recoverable event, but a latch-up that doesn't trip protection is a latent failure. I'd also consider whether the protection should latch off or auto-retry. For a latch-up, the device may recover if power is cycled, so a controlled retry with a limited count is reasonable, but if it retries indefinitely you can mask a hard failure. I'd make the retry policy configurable and log every event.
+
+On the analog side specifically, latch-up in an analog front-end can be harder to detect because the current step may be smaller and the rail sag less pronounced. I'd add per-branch current monitoring with a threshold that's tight enough to catch an analog latch-up, and I'd make sure the analog branch's protection doesn't rely on the digital section being alive to report it. If the digital section is the one that's latched, the analog branch still needs to be able to protect itself autonomously.
+
+Finally, I'd think about the shared upstream. If both branches share a single DC-DC converter, that converter has to be able to survive the transient of one branch tripping without dropping the other. That means the converter's output capacitance and its own current limit need to be sized for the worst-case branch trip, and the converter itself needs to be radiation-tolerant enough that it doesn't latch up under the same event that latched the load.
+
+**Possible follow-ups:**
+- How would you distinguish a latch-up event from a normal load transient when setting the protection threshold?
+- If the analog front-end's latch-up current is small enough that it doesn't trip the branch protection, how would you detect it?
+
+## Q3: You're reviewing a design where a junior engineer has proposed using a single commercial LDO with no radiation data to post-regulate a critical analog rail, arguing that the upstream DC-DC is already rad-tolerant so "the LDO doesn't matter." How would you evaluate this argument?
+
+**Answer:** The argument has a kernel of truth — the upstream converter being rad-tolerant does remove some of the risk — but it doesn't follow that the LDO is therefore safe. The LDO is a separate device with its own radiation response, and the fact that it's downstream of a good converter doesn't protect it from TID, SETs, or SEL. I'd walk through the specific failure modes.
+
+First, total ionizing dose. An uncharacterized LDO can exhibit parametric drift over dose — output voltage shift, dropout voltage increase, quiescent current increase — and the direction and magnitude are not predictable without data. For a critical analog rail, even a small output shift can degrade the measurement accuracy of whatever's downstream. The upstream converter being rad-tolerant doesn't help here; the LDO's own pass element and reference are what drift.
+
+Second, single-event transients. An LDO's control loop can produce output transients under heavy-ion or proton exposure, and those transients propagate directly to the analog rail. If the analog rail feeds a precision ADC reference or a sensor front-end, an SET on the LDO output can corrupt a measurement. The upstream converter's SET response is irrelevant to this — the LDO is the last stage before the load.
+
+Third, single-event latch-up. An uncharacterized LDO can latch up, and if it does, it can drag the analog rail down or draw excessive current. The upstream converter may survive that, but the analog rail is still lost, and depending on the topology the latch-up could propagate.
+
+So the correct evaluation isn't "is the upstream rad-tolerant?" but "what does the LDO's own radiation response do to the analog rail, and can the system tolerate it?" If there's no data, the honest answer is that the risk is unquantified, and for a critical analog rail that's usually not acceptable. The options are: find a rad-tolerant or radiation-characterized LDO, characterize the candidate part (which may be impractical for a single part on a limited budget), or add mitigation — for example, a redundant LDO with voting, or a post-regulation scheme where the LDO's output is monitored and the system can detect and respond to a drift or transient. If none of those are feasible, the design needs to explicitly accept the risk, and that acceptance should be documented and reviewed, not assumed away by the upstream converter's rating.
+
+The constructive way to handle the review is to ask the engineer what data they have on the LDO, and if the answer is "none," to frame the question as "what's the failure mode we're accepting, and is it acceptable for this rail?" That usually moves the conversation from "does it matter?" to "what do we do about it?"
+
+**Possible follow-ups:**
+- If the LDO is the only uncharacterized part in an otherwise rad-tolerant chain, how would you prioritize characterizing it versus adding mitigation?
+- Would your answer change if the analog rail were non-critical, e.g., a housekeeping measurement rather than a control-loop input?
+
+## Q4: How would you approach designing a test plan to verify that a system recovers correctly from a single-event functional interrupt (SEFI) that puts the main processor into a state where it's still drawing current and still toggling a heartbeat line, but no longer executing the control loop?
+
+**Answer:** The hard part of this test is that the failure mode is defined by what the processor *stops* doing, not by what it *starts* doing, and the heartbeat line is specifically designed to look healthy. So the test plan has to be built around detecting the absence of correct behavior, not the presence of a fault signal.
+
+I'd start by defining what "executing the control loop" means in observable terms. The control loop has outputs — actuator commands, telemetry updates, state transitions — and those outputs have timing and value characteristics. The test needs to verify that after a SEFI-like event, the system returns to producing those outputs within a bounded time, and that the outputs are correct, not just present. A heartbeat that keeps toggling is not evidence of recovery; it's evidence that the heartbeat mechanism itself is still running, which may be a separate task or a hardware timer.
+
+For fault injection, since I can't inject actual radiation on the ground, I'd use a combination of techniques. The most direct is to instrument the firmware with a test hook that forces the processor into the target state — for example, a debug command that halts the control loop task while leaving the heartbeat task running. That lets me verify the recovery mechanism end-to-end. I'd also use hardware fault injection where available: a debugger that halts the core, or a JTAG-based mechanism that corrupts a specific register or memory location. The goal is to reproduce the *observable* failure mode, not the radiation physics.
+
+The recovery mechanism itself needs to be tested for its own failure modes. If recovery relies on a watchdog, the test needs to verify that the watchdog fires when the control loop stops, that the reset actually reinitializes the system, and that the system comes back to a known-good state. If recovery relies on a supervisor task that monitors the control loop's progress, the test needs to verify that the supervisor detects the stall and that its recovery action works. And critically, the test needs to verify that the heartbeat line's continued toggling doesn't mask the stall from whatever is supposed to detect it — if the watchdog is fed by the heartbeat, then a SEFI that leaves the heartbeat running will never trigger the watchdog, and that's a design flaw the test should expose.
+
+I'd also test the boundary cases: what if the SEFI occurs during initialization, before the watchdog is enabled? What if it occurs during a critical write to non-volatile memory? What if it occurs in the recovery task itself? These are the cases where a naive recovery scheme fails, and they're worth explicit test cases.
+
+Finally, I'd define pass/fail criteria in terms of system behavior, not just "the processor reset." The system should recover to a state where the control loop is producing correct outputs, the telemetry reflects the event, and the system is ready to handle the next event. If the recovery leaves the system in a degraded state that isn't detected, that's a partial pass at best, and the test plan should capture that.
+
+**Possible follow-ups:**
+- If the heartbeat is fed by a hardware timer rather than the control loop task, how does that change your detection strategy?
+- How would you test recovery from a SEFI that occurs while the system is already in a degraded state from a previous event?
+
+## Q5: You're leading a design review where a junior engineer has proposed a solution you believe is under-margined for the radiation environment. The engineer is confident and has done real work on it. How would you handle the disagreement so that the review stays constructive and the right technical decision gets made?
+
+**Answer:** The first thing I'd do is separate the technical question from the interpersonal one. The engineer has done real work, which means they've thought about the problem and have a rationale. My job isn't to win the argument; it's to make sure the decision is correct and that the engineer understands *why* it's correct, because they'll be the one implementing it.
+
+I'd start by asking them to walk me through their reasoning — specifically, what margin they've assumed, where the numbers come from, and what failure mode they're protecting against. Often the disagreement is about assumptions rather than conclusions: they may have assumed a radiation environment that's less severe than the one I have in mind, or they may have used a datasheet number that doesn't account for the full temperature or dose range. Getting the assumptions on the table turns "I think you're wrong" into "here's the number I'm working from — where does yours come from?"
+
+If the assumptions are the same and we still disagree, I'd focus on the consequence of being wrong. For a radiation-environment design, the cost of under-margining is often not a graceful degradation but a mission failure, and the cost of over-margining is usually mass, power, or cost. I'd frame the question as: what's the worst case if this margin is insufficient, and can the system tolerate that? If the answer is "the payload fails," then the burden of proof is on demonstrating the margin is sufficient, not on me to prove it isn't. That's a different conversation than "I think your number is too small."
+
+I'd also look for a way to test the disagreement rather than resolve it by authority. If the concern is a specific failure mode, can we characterize it? If it's a margin question, can we add a test point or a monitor that tells us in flight whether the margin is being consumed? Sometimes the right answer is to proceed with the design but add instrumentation, so the decision is reversible or at least observable. That respects the engineer's work while managing the risk.
+
+Throughout, I'd be explicit that the goal is the right decision, not consensus. If after the discussion I still believe the design is under-margined and the engineer hasn't provided evidence to change my mind, I'd make the call and document the rationale — but I'd do it in a way that makes clear it's a technical judgment, not a judgment of their work. And I'd follow up afterward to make sure they understand the reasoning, because a decision that's imposed without understanding tends to get relitigated or worked around.
+
+The constructive framing matters here. A design review where the lead "wins" by pulling rank teaches the team to avoid bringing up concerns, which is the opposite of what you want in a safety-critical environment. A review where the lead asks good questions and makes the reasoning visible teaches the team how to think about margin, which is what you actually need.
+
+**Possible follow-ups:**
+- If the engineer's analysis is correct but the margin is still insufficient for the environment, how do you decide between adding mitigation and accepting the risk?
+- How would you handle it if the engineer's proposal had already been approved by another reviewer before you saw it?
