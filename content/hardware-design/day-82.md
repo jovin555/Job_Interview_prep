@@ -1,0 +1,69 @@
+# hardware-design — Day 82
+
+## Q1: How would you approach selecting a shunt resistor value and current-sense amplifier topology for measuring a bidirectional motor current of up to 1A, where the measurement must be accurate to ±2% over temperature and the shunt must not dissipate excessive power?
+
+**Answer:** Start by budgeting the error sources, because the shunt value is a trade-off between signal amplitude and self-heating. A larger shunt gives more signal for the amplifier to work with, improving SNR and reducing the relative impact of the amplifier's offset and noise — but it dissipates more power and creates more self-heating, which shifts the shunt's own resistance via its temperature coefficient and can drift the reading. A smaller shunt keeps dissipation low but pushes the differential signal down toward the amplifier's offset and noise floor, so the amplifier's input offset voltage and its drift over temperature start to dominate the error budget.
+
+For a ±2% total accuracy target over temperature, I'd first pick a shunt with a low temperature coefficient — a metal-element or four-terminal Kelvin-sensed part rather than a standard thick-film resistor — because a high-TCR part can eat the entire error budget on its own. Then I'd size the shunt so the full-scale drop is large enough to be comfortably above the amplifier's input offset, but small enough that I²R dissipation stays well within the resistor's power rating at the maximum ambient, with margin for derating. Four-terminal sensing matters here: at these low resistance values, the solder-joint and trace resistance would otherwise be a significant fraction of the shunt itself.
+
+For topology, a bidirectional measurement needs the amplifier to handle both polarities, so I'd look at a current-sense amplifier with a defined common-mode range that includes the bus voltage, or a difference amplifier built around a matched-resistor network. The key parameter is CMRR, because the shunt sits at some common-mode potential and any CMRR error translates directly into a current error. I'd also check the amplifier's input offset voltage and its drift, since those set the floor on achievable accuracy, and confirm the gain-setting resistors are matched and ratio-stable over temperature — discrete resistor networks usually can't hold the ratio well enough, so an integrated difference amplifier or a dedicated current-sense IC is usually the better choice.
+
+Finally, I'd verify the whole chain on the bench: inject a known current, sweep it across the full bidirectional range, and check the error at temperature extremes, not just at room temperature. The datasheet numbers tell you what's possible; the bench tells you what you actually built.
+
+**Possible follow-ups:**
+- How would you decide between high-side and low-side sensing for this application, and what does that choice do to the common-mode requirements?
+- If the shunt's self-heating is still causing drift, what are your options — and what are the trade-offs of each?
+
+## Q2: How would you approach designing a hardware-based power-on self-test for a medical device's analog signal chain, and what would you want it to verify independently of firmware?
+
+**Answer:** The point of a hardware-based POST is to verify the analog signal chain using a known, on-board reference — not by asking the firmware to read the ADC and check whether the numbers look plausible. If the firmware is the thing that's suspect, or if the ADC itself has failed, a firmware-only check can pass while the signal chain is actually broken. So the hardware POST should inject a known stimulus and compare the response against a hardware-defined window, independent of the main application processor.
+
+Concretely, I'd want the POST to verify a few things. First, that the reference voltage is present and within tolerance — a simple comparator against a divided-down bandgap or a window comparator on the reference rail. Second, that the analog front-end's gain path is intact: inject a known reference-derived signal at the input of the conditioning chain and check that the output lands in an expected window. Third, that the ADC is actually converting — a known input should produce a known code, and a stuck-at or open input should produce something outside the window. Fourth, that the supply rails are within their operating windows, since an out-of-range rail invalidates everything downstream.
+
+The design decisions are about what "known" means and how tight the window can be. The stimulus has to be derived from something the system already trusts — typically the same precision reference the ADC uses — so that a reference failure is caught rather than masked. The comparison window has to account for the tolerances of the whole chain: the reference's initial accuracy and drift, the amplifier's offset and gain error, the ADC's own error. If the window is too tight, you get false failures in the field; too loose, and you miss real degradation. I'd set the window from a worst-case error budget, then verify it against real units across temperature.
+
+I'd also want the POST to be able to run at power-on and, ideally, on demand, and to latch a failure rather than just report it — a failed POST should put the device into a safe state and require a deliberate action to clear. And I'd want the result to be observable in a way that's independent of the main processor, so a hung processor can't hide a failed POST.
+
+**Possible follow-ups:**
+- How would you avoid the POST itself becoming a source of false failures as components age?
+- What's the difference between a POST that verifies the signal chain and one that verifies the safety interlocks, and would you combine them?
+
+## Q3: How would you approach debugging a circuit where an op-amp's output is correct at DC but shows a slow, large-amplitude drift over minutes when the board is warmed by nearby power components?
+
+**Answer:** A slow drift over minutes, correlated with board warming, points to a thermal effect rather than an electrical instability — the timescale is thermal, not the microseconds-to-milliseconds you'd see with oscillation or the seconds you'd see with a large RC. So the first thing I'd do is confirm the correlation: measure the op-amp's case or die temperature (or the nearby power component's temperature) alongside the output, and see whether the drift tracks it. If it does, I'm looking for a temperature-dependent parameter.
+
+The usual suspects, in rough order of likelihood: the op-amp's own input offset voltage drift, which is specified in µV/°C and can be significant for a precision part; the gain-setting resistors' temperature coefficients, especially if they're not matched, which turns a temperature change into a gain error; the input bias current's drift interacting with the source impedance; and thermocouple effects at solder joints where dissimilar metals meet, which produce small voltages proportional to the temperature gradient across the joint. If the drift is large and the op-amp is a precision part, I'd suspect the resistors or a thermocouple before the op-amp itself.
+
+To isolate it, I'd cool the board back down and watch the output recover, then selectively warm individual components — the op-amp, the feedback resistors, the power component — with a heat gun or a finger and see which one reproduces the drift. If warming the op-amp alone reproduces it, it's the op-amp's offset drift. If warming the resistors does, it's a TCR mismatch. If warming a solder joint does, it's a thermocouple. I'd also check whether the drift is present with the input shorted to a stable reference — if it is, the source is in the op-amp or its feedback network, not the sensor.
+
+The fix depends on the cause: a lower-drift op-amp, a matched resistor network with a low tracking TCR, a layout change to keep the op-amp away from the heat source or to balance the thermal gradients around the input pins, or a chopper-stabilized amplifier if the drift requirement is tight enough. The important thing is to identify the mechanism before changing parts, because swapping the op-amp when the real problem is a resistor TCR just moves the problem around.
+
+**Possible follow-ups:**
+- How would you distinguish offset drift from gain drift in this measurement?
+- If the drift is caused by a thermal gradient across the board rather than a single component, how would you address it in layout?
+
+## Q4: How would you approach selecting a crystal for a microcontroller that must maintain timing accuracy over a wide temperature range, and what would you verify on the bench?
+
+**Answer:** The starting point is the accuracy requirement over temperature, because that drives the crystal's specification more than anything else. A standard AT-cut crystal has a parabolic frequency-vs-temperature curve, typically turning over near 25°C, with a specified tolerance at the temperature extremes. If the requirement is tight — say a few ppm over 0–50°C — a standard crystal may not be enough, and I'd look at a TCXO or an oven-controlled part, or accept that the MCU's internal oscillator won't meet it at all. The datasheet's frequency tolerance over temperature, plus the initial tolerance and the aging spec, all add up, and I'd budget them together rather than looking at any one in isolation.
+
+Beyond the crystal itself, the load capacitance matters. The crystal is specified for a particular load capacitance, and if the actual load capacitance in the circuit differs — because of stray capacitance, the MCU's input capacitance, or the wrong load caps — the frequency shifts. So I'd calculate the load capacitance from the crystal's spec, subtract the strays and the MCU's pin capacitance, and size the load caps accordingly. I'd also check the crystal's drive level and the oscillator's drive capability, because over-driving the crystal can damage it or shift its frequency, and under-driving it can cause unreliable startup.
+
+On the bench, I'd verify three things. First, startup margin: does the oscillator start reliably at the temperature extremes, especially cold, where the crystal's activity and the oscillator's loop gain are both lower? I'd check startup at the cold extreme with a scope on the oscillator output, looking for a clean, fast start rather than a slow or marginal one. Second, frequency accuracy over temperature: measure the actual frequency at the temperature extremes and compare against the requirement, using a frequency counter or a scope with a stable timebase. Third, drive level: measure the oscillator's output amplitude and confirm it's within the crystal's specified drive level, not just at room temperature but at the extremes.
+
+I'd also look at the layout — keeping the crystal traces short, away from switching nodes and noisy digital signals, with a ground guard ring if the board is dense — because a crystal circuit is high-impedance and easy to disturb.
+
+**Possible follow-ups:**
+- How would you decide between a crystal and a ceramic resonator for this application?
+- What would you check if the oscillator starts reliably at room temperature but fails to start at the cold extreme?
+
+## Q5: (Behavioral) Imagine you're the lead hardware engineer on a medical device project, and during a design review the reliability engineer argues that your chosen connector for the patient cable is not rated for the number of mating cycles the device will see over its lifetime, and proposes a more expensive, higher-cycle connector. You believe the current connector is adequate because the cable is intended to be connected once and left in place, but the reliability engineer is concerned about field replacement. How would you handle this disagreement?
+
+**Answer:** The disagreement is really about an assumption, not about the connector — I believe the cable is connected once and left in place, and the reliability engineer believes it may be replaced in the field. So the first thing I'd do is surface that assumption and get it resolved with the people who actually know the use case: clinical, service, and regulatory. If the device is genuinely single-use or the cable is never meant to be disconnected, then the mating-cycle requirement is low and my connector is fine. If the cable is expected to be replaced — by a service technician, or by the user, or as part of a maintenance schedule — then the reliability engineer is right and I need to reconsider.
+
+I'd want to look at the actual numbers rather than argue from intuition. What's the connector's rated mating-cycle count? What's the realistic number of cycles over the device's service life, including worst-case field replacement? If the margin is comfortable, the disagreement may dissolve. If it's marginal, that's useful information regardless of who "wins." I'd also consider whether there's a middle option — a connector with a higher cycle rating that isn't the most expensive one, or a design change that reduces the number of cycles the connector sees (for example, a strain-relief or a keyed connector that discourages repeated mating).
+
+If we still disagree after that, I'd escalate it as a documented decision rather than let it stall the review. In a medical device context, the reliability engineer's concern is a legitimate input to the risk file, and the decision — whichever way it goes — needs to be traceable, with the rationale recorded. If we go with my connector, I'd want the assumption ("cable is not field-replaceable") documented and validated; if we go with theirs, I'd want the cost and schedule impact understood. The goal isn't to win the argument, it's to make sure the device is safe and the decision is defensible.
+
+**Possible follow-ups:**
+- How would you validate the assumption about field replacement before making the decision?
+- If the higher-cycle connector is chosen, what else in the design might need to change to support field replacement?
