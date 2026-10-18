@@ -1,0 +1,61 @@
+# tools — Day 89
+
+## Q1: How would you approach setting up a logic analyzer's protocol decoder for a custom, non-standard serial protocol on a medical device, where the framing doesn't match any built-in decoder — for example, a proprietary sensor bus with a non-byte-aligned frame header?
+
+**Answer:** I'd start by treating the decoder as a specification problem before it's a tooling problem. The first step is to write down the frame structure explicitly — header length in bits, sync pattern, payload width, checksum/CRC position, and idle-line behavior — because a decoder built on a vague mental model will produce plausible-looking garbage. Then I'd capture a known-good transaction at a sample rate comfortably above the bus rate (at least 4–5× the fastest edge rate, ideally more, so bit boundaries are unambiguous), and manually annotate the capture against the spec to confirm my understanding of the framing is correct before writing any decoder logic.
+
+For the decoder itself, most logic analyzer software lets you write a custom low-level protocol decoder in a scripting language (Python in Saleae's case, or a similar extension mechanism in other tools). I'd structure it as a small state machine: hunt for the sync pattern at the bit level, then transition to a "frame body" state that emits fields as annotations, and a "verify" state that checks the CRC and flags bad frames rather than silently dropping them. The key design decision is to emit *raw bit offsets* as annotations alongside decoded fields, so that when something looks wrong you can jump straight to the waveform and see whether the decoder or the device is at fault.
+
+I'd validate the decoder against three cases: a nominal frame, a deliberately corrupted frame (to confirm the CRC check fires), and a boundary case like a truncated frame or back-to-back frames with minimal inter-frame gap. Only after those pass would I trust it for debugging. The trap with custom decoders is that they can encode your assumptions — so I'd keep the decoder in version control alongside the protocol spec and treat any spec change as requiring a decoder update and re-validation.
+
+**Possible follow-ups:**
+- How would you handle a protocol where the bit clock is recovered from the data itself rather than being a separate line?
+- What would you do if the decoder works on captured traces but the live capture shows framing errors that don't appear in the saved traces?
+
+## Q2: How would you approach configuring a Keil uVision project for a medical device firmware build so that the optimization level, linker script, and startup code are locked down and auditable, rather than relying on whatever the IDE defaults to?
+
+**Answer:** The core problem is that IDE project files are easy to change accidentally and hard to diff meaningfully, so for a regulated build I want the build configuration to be explicit, version-controlled, and ideally reproducible outside the IDE. My approach is to treat the uVision project as a thin wrapper and push as much of the real configuration as possible into files that are human-readable and reviewable: the linker script as a standalone `.sct` file checked into the repo, the startup code as a source file with a known revision, and the optimization and preprocessor settings documented in a build configuration record.
+
+Concretely, I'd set the optimization level explicitly per target (and be deliberate about it — for safety-critical code, the choice between `-O0`, `-O1`, and higher levels should be a documented decision tied to the verification strategy, not a default), pin the compiler/toolchain version, and record the exact device pack and CMSIS version. I'd also enable the "create batch file" or use the command-line build (`UV4 -b`) so the build can run in CI and produce a log that captures the actual flags used — that log becomes the auditable artifact. For the linker script and startup code, I'd add a checksum or hash step in the build so that if either changes, the build output records it.
+
+The auditability piece is really about traceability: for each released binary, you want to be able to answer "what optimization level, what linker script revision, what startup code, what compiler version produced this?" So I'd maintain a build manifest generated at build time, and I'd make the release process require that manifest to be archived with the binary. I'd also do a periodic "clean room" build from a fresh checkout to confirm the project builds identically without any local IDE state — that catches settings that live only in someone's `.uvprojx` and never made it into version control.
+
+**Possible follow-ups:**
+- How would you detect that someone changed the optimization level locally and built a binary that then got flashed during testing?
+- What's your view on using `-O0` for everything versus optimizing and relying on other verification methods?
+
+## Q3: How would you approach using a spectrum analyzer's tracking generator and a directional coupler to characterize the input impedance of a custom analog front-end, and how would you decide whether the measurement is trustworthy enough to act on?
+
+**Answer:** The measurement principle is straightforward: with a tracking generator and a directional coupler, you're measuring the reflection coefficient at the front-end's input port across frequency, and from that you can derive return loss and, with a reference plane calibration, input impedance. The trustworthiness question is really a calibration and reference-plane question, so I'd spend most of the effort there.
+
+First, I'd calibrate out the test setup — the cables, the coupler's directivity, and any fixture — using a SOL (short-open-load) calibration at the plane where I actually want to know the impedance, not at the analyzer port. If the front-end has a connector, I'd calibrate to that connector; if I'm probing a test point or a pad, I'd build a small fixture and characterize it, because an un-de-embedded fixture can easily dominate the result at higher frequencies. I'd also check the coupler's directivity spec — a coupler with modest directivity limits how low a return loss you can meaningfully resolve, so if the front-end is well-matched, the measurement floor may be set by the coupler, not the device.
+
+For deciding whether to act on the result, I'd look at three things: repeatability (measure twice, reconnect, measure again — if the curve moves, the setup is suspect), consistency with an independent method (e.g., a VNA measurement or a time-domain reflectometry check, or comparing against the simulated input impedance from the front-end's SPICE model), and sensitivity to the reference plane (does moving the calibration plane by a few centimeters change the conclusion?). If all three agree, I'd trust it enough to make a design decision. If they disagree, I'd treat the measurement as diagnostic rather than definitive and dig into the fixture or calibration before changing any component values.
+
+**Possible follow-ups:**
+- How would you characterize a fixture if you don't have a VNA available and only have the spectrum analyzer setup?
+- What would a resonance in the input impedance curve tell you about the front-end, and how would you distinguish a real resonance from a fixture artifact?
+
+## Q4: How would you approach setting up a Segger J-Link's RTT (Real-Time Transfer) logging on a Zephyr RTOS target where the UART is already committed to a safety-critical protocol, and how would you avoid the logging itself perturbing the system's timing?
+
+**Answer:** RTT is attractive here precisely because it uses the debug probe's memory-access channel rather than a peripheral, so it doesn't consume the UART and doesn't require the target to block on a slow peripheral. The setup is: enable RTT support in the Zephyr configuration (`CONFIG_USE_SEGGER_RTT`), allocate an up-buffer (target-to-host) sized appropriately, and use the RTT logging backend so that `LOG_*` calls route through RTT instead of the UART backend. On the host side, J-Link RTT Viewer or a scripted RTT client reads the buffer.
+
+The timing-perturbation concern is the important one. RTT writes are fast but not free — they're a memory copy into a ring buffer, and if the host isn't draining the buffer, the target can block or drop messages depending on the mode configured. So I'd size the buffer generously, configure non-blocking mode so the target never stalls on a full buffer (accepting dropped messages rather than perturbed timing), and keep log volume low in timing-critical paths — or gate verbose logging behind a runtime flag so it's off during timing-sensitive measurements. I'd also be careful about where logging happens: logging inside an ISR or a high-priority thread changes the timing of exactly the code you're trying to measure, so I'd move logging to a lower-priority thread that consumes a queue, or use RTT's "lock-free" mode carefully with a single producer.
+
+To validate that logging isn't perturbing the system, I'd measure a known timing-critical operation (e.g., a control loop period or an ISR latency) with logging off and with logging on, using a GPIO toggle and an oscilloscope as the ground truth, and confirm the difference is within the noise floor of what I care about. If it isn't, the logging strategy needs to change before I trust any timing data collected with logging enabled.
+
+**Possible follow-ups:**
+- How would you handle the case where the RTT buffer fills because the host disconnects mid-run?
+- What's the difference between RTT's blocking and non-blocking modes, and when would you choose each?
+
+## Q5: (Behavioral) Imagine you're leading a project where a junior engineer has set up the lab's spectrum analyzer and near-field probe for an EMI pre-compliance scan, and you discover the resolution bandwidth and detector mode are set for a quick "get a feel for it" scan rather than the settings the test standard requires. The engineer is confident the settings are fine because "the peaks show up either way." The formal scan is scheduled for tomorrow, and the lab time is booked. How would you handle this situation?
+
+**Answer:** The first thing I'd do is separate the technical issue from the interpersonal one, because they need different handling and mixing them makes both worse. Technically, the engineer isn't wrong that the peaks show up either way — a quick scan with a wide resolution bandwidth and a peak detector will reveal *where* energy is, which is genuinely useful for finding suspects. The problem is that the formal scan needs settings that match the test standard so the results are comparable to the limits and defensible in a compliance context; a wide RBW can over- or under-read a narrow emission, and the detector choice changes the measured amplitude. So the fix isn't "you did it wrong," it's "these settings are right for the exploratory scan and wrong for the compliance scan, and here's why."
+
+In the moment, I'd sit with the engineer and walk through the standard's requirements together — pull up the relevant RBW and detector requirements and compare them to what's configured. That does two things: it fixes the immediate problem, and it builds the engineer's understanding so it doesn't recur. I'd frame it as "let's make sure we can defend these numbers to the test house," which is a shared goal rather than a criticism.
+
+For the schedule, I'd assess whether the correct settings can be applied and a re-scan done in the booked time — often they can, since it's a configuration change plus a re-run, not a rebuild. If the full formal scan can't fit, I'd prioritize: run the corrected scan on the highest-risk areas first, and be honest with the project lead about what was and wasn't covered, rather than presenting a partial scan as complete. I'd also add a pre-scan checklist to the lab procedure so the settings are verified before the session starts, which is the systemic fix. The engineer's confidence isn't the problem — the missing checklist is.
+
+**Possible follow-ups:**
+- How would you structure that pre-scan checklist so it's actually used rather than ignored under schedule pressure?
+- If the corrected scan reveals an emission that the quick scan missed, how would you communicate that to the project lead without it sounding like blame?

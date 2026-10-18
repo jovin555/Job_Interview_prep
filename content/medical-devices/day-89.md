@@ -1,0 +1,57 @@
+# medical-devices — Day 89
+
+## Q1: How would you approach designing the patient leakage current measurement path for a device that has both BF-type and CF-type applied parts, and how would you decide which measurements are actually required?
+
+**Answer:** I'd start from the standard rather than from the schematic. IEC 60601-1 defines leakage current paths by what they connect — earth leakage, enclosure/touch current, patient leakage (AC and DC), and patient auxiliary current — and the limits depend on the applied part classification and the condition (normal condition vs. single fault condition). So the first step is to build a measurement matrix: for each applied part, list which measurements apply (patient leakage from the applied part to earth, patient leakage between applied parts of different types, patient auxiliary current through the patient), and for each, the applicable limit under NC and SFC.
+
+The CF part is the demanding one: its limit is roughly an order of magnitude tighter than BF, so the measurement setup has to be good enough to trust a reading near that limit. That means a proper measuring device per the standard's Figure/network requirements (the correct MD network, not a generic DMM), a low-noise, low-capacitance fixture, guarding to keep stray fields from coupling into the measurement, and a stable, isolated supply for the device under test. I'd characterize the setup itself first — measure a known reference and confirm the floor of the measurement is well below the limit — because otherwise you can't distinguish device leakage from fixture leakage.
+
+Deciding which measurements are required comes from the classification and the intended application: which parts are BF vs. CF, whether they're intended to be connected simultaneously, whether the patient can be connected to earth through other means, and whether the device has conductive parts that could become live under single fault. I'd document that rationale in the test plan so a reviewer can see why each measurement was included or excluded, rather than just running the full table blindly.
+
+**Possible follow-ups:** How would you isolate whether an elevated CF patient leakage reading is coming from the device or from your measurement setup? What changes in the measurement approach when the applied parts are intended to be used simultaneously on the same patient?
+
+## Q2: During IEC 60601-1-2 immunity testing, a device passes radiated RF immunity at most frequencies but shows a reproducible malfunction in a narrow band around one specific frequency. How would you approach diagnosing and resolving it?
+
+**Answer:** A narrow, reproducible band is a strong clue — it usually points to a resonance or a specific coupling path rather than broadband susceptibility. I'd treat it as a structured investigation rather than immediately adding filtering.
+
+First, characterize the failure precisely: what is the actual malfunction (display glitch, sensor offset, comms dropout, reset), at what field strength does it start, and is it amplitude-dependent or purely frequency-dependent? Then map the frequency against the device's own characteristics — cable lengths (a cable can act as an efficient antenna at a quarter-wave resonance), enclosure slot dimensions, switching frequencies and their harmonics, and any oscillator or clock that could be pulled or rectified. A quick check is whether the band shifts when you change cable routing or length; if it does, you've found a resonant coupling path.
+
+Next, localize the entry point. I'd do a spot-frequency scan with the field applied while probing: does the failure persist with the enclosure shielded with copper tape over a seam, with a ferrite clamped on a specific cable, or with a bypass capacitor added at a specific IC pin? That narrows whether it's radiated coupling into a cable, into the PCB, or into the enclosure seam. On the PCB side, I'd look at whether the affected node is high-impedance, whether the return path under it is continuous, and whether there's adequate local decoupling.
+
+The fix usually follows the mechanism: common-mode chokes or ferrites on the offending cable, improved shielding/grounding of the enclosure seam, a small RC or feedthrough filter at the susceptible pin, or layout changes to shrink the loop area. I'd verify the fix at the spot frequency first, then re-run the full sweep, because a filter that fixes one band can create a new resonance elsewhere.
+
+**Possible follow-ups:** How would you tell the difference between a radiated coupling problem and a conducted one when the failure only appears at one frequency? What would you do if the fix worked at the spot frequency but the device then failed at a different band during the full re-test?
+
+## Q3: How would you approach structuring a risk management file so that it stays useful and auditable throughout a project, rather than becoming a document assembled at the end?
+
+**Answer:** The failure mode I'd design against is the risk file that gets written backwards from a finished design — it looks complete but doesn't actually drive anything, and it falls apart under audit because the links to design decisions aren't real.
+
+I'd structure it around a living hazard analysis that's updated at each design phase, not a single document produced at the end. The core is a traceable chain: hazard → foreseeable sequence of events → hazardous situation → harm → risk estimate → risk control measure → verification that the control was implemented and is effective → residual risk evaluation. Each link needs an identifier so it can be referenced from the design inputs, the verification plan, and the design review records. That way, when a design changes, you can query which hazards and controls are affected.
+
+Practically, I'd keep the hazard analysis in a tool or structured spreadsheet that supports filtering and cross-referencing, and I'd make "review the risk file against the current design" a standing agenda item at each design review rather than a separate event. Risk controls should appear as design inputs with their own verification evidence — if a control is "add a hardware interlock," there should be a design output that implements it and a test that confirms it works. Residual risk acceptance should be recorded with the rationale and the person who accepted it, and the whole file should reference the applicable standards and the clinical/use context that informed the hazard identification.
+
+The test of whether it's working: can someone who wasn't on the project trace a specific harm back to the design decision that mitigates it, and forward to the test that proves the mitigation works, without asking you? If yes, the file is doing its job.
+
+**Possible follow-ups:** How would you handle a hazard that's identified late, after the design is largely frozen? What's your approach to keeping the risk file consistent when the same hazard is addressed by both a hardware and a software control?
+
+## Q4: How would you approach deciding whether a given software failure in a medical device should be classified as a safety-related failure requiring formal risk controls, versus a non-safety usability or reliability issue?
+
+**Answer:** The classification should come out of the risk analysis, not out of intuition about how bad the failure "feels." The question I'd ask is: can this failure, alone or in combination with other failures or foreseeable use, lead to a hazardous situation that could result in harm to the patient or operator? If yes, it's safety-related and needs to be in the risk file with controls and verification. If the worst credible outcome is annoyance, lost data that has no clinical consequence, or a usability degradation that the user can recover from, it's a reliability/usability issue — but I'd still record the reasoning, because "we decided it's not safety-related" is itself a decision that needs a rationale.
+
+The subtle cases are where a failure is only hazardous in combination — for example, a display update glitch that's harmless on its own but could mask an alarm condition. That's why I'd trace the failure through the hazard analysis rather than judging it in isolation. I'd also consider detectability: a failure that's silently wrong is more concerning than one that's obvious to the user, because the user can't compensate.
+
+There's a software-specific angle too: under IEC 62304, the software safety classification (A/B/C) is driven by whether a software failure could contribute to a hazardous situation and how severe the resulting harm could be. So the same reasoning that classifies an individual failure feeds the overall software classification. I'd want the classification decision documented with the hazard reference, reviewed by quality/regulatory, and reflected in the rigor of the verification — a Class C safety-related function gets more demanding verification evidence than a Class A one.
+
+**Possible follow-ups:** How would you handle a failure that's safety-related only when a second, independent failure is also present? What evidence would you want before accepting that a failure is genuinely non-safety-related?
+
+## Q5: You're the lead engineer, and during a design review the quality manager insists on adding a risk control measure for a hazard that the engineering team considers negligible. The schedule impact would be significant. How would you handle this situation?
+
+**Answer:** I'd treat the disagreement as a legitimate risk-perception gap to be resolved with evidence, not as a schedule fight. The quality manager is often seeing something the engineering team is discounting — a use case, a combination of failures, or a regulatory expectation — and dismissing it as "negligible" without examining why is how risk files get weak.
+
+My approach: first, get the hazard and the proposed control written down precisely, and ask the quality manager to articulate the sequence of events and the harm they're concerned about. Then compare that against the existing risk estimate — what severity, probability, and detectability were assumed, and on what basis? Often the disagreement is really about one of those inputs, and once it's explicit, either the estimate was wrong (and the control is justified) or the concern is covered by an existing control the quality manager hadn't seen.
+
+If the risk genuinely is low, I'd still take it seriously: is the control cheap and low-risk to add? If so, adding it may be the pragmatic call even if the risk estimate says it's marginal, because the cost of the argument and the audit exposure can exceed the cost of the control. If the control is genuinely expensive and the risk is genuinely low, I'd escalate the decision with the evidence laid out — risk estimate, the proposed control's cost and schedule impact, and the residual risk if we don't add it — to whoever owns the risk acceptance decision. That's not passing the buck; it's putting the decision in front of the person accountable for it, with the trade-off made explicit.
+
+Throughout, I'd keep the tone collaborative and document the outcome and rationale in the risk file, so the decision is defensible later regardless of which way it goes.
+
+**Possible follow-ups:** What would you do if the quality manager's concern turned out to be based on a use case the engineering team hadn't considered? How would you handle a situation where the risk acceptance authority sides with the engineering team but the quality manager remains unconvinced?
