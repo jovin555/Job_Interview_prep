@@ -1,0 +1,59 @@
+# debugging-failure-analysis — Day 91
+
+## Q1: You're debugging a device that fails only when it's powered from its internal battery, but passes every test on a bench supply at the same nominal voltage. How would you approach this?
+
+**Answer:** The first thing I'd do is resist the assumption that "same nominal voltage" means "same electrical environment." A bench supply and a battery differ in several ways that matter: source impedance, transient response, noise floor, and the presence or absence of a protection/charging path in between. So I'd start by characterizing the actual rail at the load under both conditions — same probe point, same bandwidth limit, same timebase — and compare DC level, ripple, and load-transient response. A battery has very low source impedance but can sag under fast transients if the protection FET or gauge sense resistor adds resistance; a bench supply may have a slow loop that the device never stresses because the cable inductance dominates.
+
+Next I'd isolate the variable deliberately. If the device has a battery charger or power-path IC, I'd check whether the failure correlates with the power-path state rather than the source itself — many "battery-only" bugs are really "power-path switchover" bugs. I'd also check for behaviors that only exist on battery: fuel-gauge communication, low-battery detection thresholds, brownout detector configuration, or firmware that changes clock/power mode based on source detection. A common trap is a GPIO or comparator that reads the source and silently changes a peripheral configuration.
+
+Then I'd try to reproduce with a battery emulator or a bench supply plus a series resistor and electronic load to mimic source impedance, so I can sweep the variable rather than swap hardware. If the failure follows the impedance or the transient response, that points at power integrity; if it follows the source-detect signal, that points at firmware configuration. One change at a time, and I'd log the rail and the relevant GPIOs simultaneously so the correlation is visible.
+
+**Possible follow-ups:** How would you distinguish a brownout-reset cause from a firmware power-mode cause if both produce the same symptom? What instrumentation would you add to the device itself if the failure only reproduces in the field?
+
+## Q2: A device's firmware occasionally reports a sensor value that is plausible but wrong — not out of range, not flagged by any self-test, just incorrect — and it's only caught later when the data is reviewed offline. How would you approach this investigation?
+
+**Answer:** "Plausible but wrong" is the hardest class of bug because every guard you'd normally rely on passes. The investigation has to shift from threshold checking to provenance checking: I need to establish where in the signal chain the value first becomes wrong, and whether the wrongness is in the analog domain, the conversion, the transport, or the storage.
+
+I'd start by making the data path observable end to end. That means timestamped capture at the ADC output, at the firmware variable after conversion, and at the transmitted/stored record, ideally on the same time base. If the value is correct at the ADC and wrong in the variable, it's a conversion or scaling issue — a fixed-point overflow, a units mismatch, a calibration coefficient applied twice, or a signed/unsigned interpretation error. If it's correct in the variable and wrong on the wire, it's a transport or packing issue. If it's correct on the wire and wrong in storage, it's a write/read or endianness problem.
+
+I'd also look hard at the conditions under which the bad values occur rather than the values themselves. Are they correlated with a particular operating mode, a buffer boundary, a concurrent task, a temperature, or a specific sensor unit? A single-bit flip pattern suggests memory or transport corruption; a smooth but offset value suggests calibration or scaling; a value that looks like a neighboring channel's reading suggests an indexing or multiplexer bug. I'd build a small offline analysis of the captured logs to test those hypotheses statistically before touching hardware.
+
+Finally, I'd add a lightweight integrity check in the firmware — a checksum or sequence number on the record — not as a fix but as a detector, so the next occurrence is caught at the moment it happens rather than weeks later. That converts an unreproducible field report into a reproducible bench case.
+
+**Possible follow-ups:** How would you tell a calibration-coefficient error apart from a genuine sensor drift using only logged data? What would you change in the data pipeline to make this class of bug detectable in production without adding significant overhead?
+
+## Q3: You're debugging a power rail that shows excessive ripple only when a high-current subsystem is switching, but the ripple is within specification when that subsystem is idle. How would you approach this?
+
+**Answer:** This is a load-induced power integrity problem, so I'd treat it as a question of where the transient current is actually flowing and where the impedance it sees is too high. The first measurement is not the ripple at the load — it's the ripple at the regulator output and at the decoupling capacitors, because the difference between those two tells you whether the problem is the regulator's loop response or the impedance of the path between the regulator and the load.
+
+I'd probe with a proper setup: short ground lead or a coaxial probe tip, bandwidth-limited to avoid picking up radiated switching noise, and measured differentially where possible so I'm not measuring probe-loop pickup. I'd capture the switching event itself — the current step — simultaneously with the rail, using a current probe or a sense resistor, so I can see the transient's di/dt and duration. That tells me which frequency band the impedance problem lives in: a slow droop points at bulk capacitance and regulator loop bandwidth; a fast spike points at high-frequency decoupling and loop inductance.
+
+Then I'd divide and conquer on the physical layout. Is the high-current subsystem's return current sharing a path with the sensitive rail's return? Is the decoupling capacitor placed close enough that its loop inductance is low at the relevant frequency? Is the regulator's feedback trace routed near the switching node or the high-current path? I'd also check whether the subsystem's switching edge rate can be slowed without violating its own requirements — sometimes the cheapest fix is reducing di/dt at the source rather than adding capacitance at the victim.
+
+I'd verify any change with the same measurement setup, and I'd check that the fix holds across load steps and temperature, not just at the one operating point where the failure was first seen.
+
+**Possible follow-ups:** How would you decide between adding bulk capacitance, adding high-frequency decoupling, and improving the layout, if you can only do one? How would you measure the rail's impedance versus frequency to confirm where the problem actually is?
+
+## Q4: You're leading a failure investigation and you've reached a point where two plausible root causes remain, both supported by partial evidence, and the team is split on which to pursue. How would you handle this and drive the investigation to a conclusion?
+
+**Answer:** The first thing I'd do is make the disagreement explicit and testable rather than letting it stay as a debate between advocates. Each hypothesis should be written down with its predicted observable consequences — what the evidence would look like if it were true, and what it would look like if it were false. Often, when you force that out, you find the two hypotheses actually predict different things in a test nobody has run yet, and the path forward becomes obvious.
+
+If they genuinely predict the same observables so far, I'd look for a discriminating test — a controlled experiment or a targeted measurement that separates them — and I'd prioritize the one that's cheapest and fastest to run. I'd assign owners to each hypothesis rather than letting the team split into camps; having someone responsible for trying to falsify their own hypothesis tends to reduce advocacy and improve evidence quality.
+
+I'd also be explicit about decision criteria and timing. If the discriminating test can't be run before a deadline, I'd say so, and choose the path that either addresses both hypotheses with a low-risk mitigation or that buys time to test properly — while being clear with stakeholders that the root cause isn't yet confirmed. What I would not do is let schedule pressure convert a "most likely cause" into a "confirmed root cause" in the record, because that undermines the corrective-action traceability later.
+
+Throughout, I'd keep the investigation log visible to the whole team so the evidence is shared rather than owned by one camp, and I'd close the loop by documenting which hypothesis was eliminated and why — that's as valuable to the next investigation as the confirmed cause.
+
+**Possible follow-ups:** What would you do if the discriminating test is destructive or expensive and the schedule won't allow it? How do you keep a team from re-litigating a hypothesis that's already been eliminated?
+
+## Q5: A medical device passes all functional and safety tests at design verification, but during a 30-unit pilot production run, three units fail a 72-hour burn-in test with the same symptom: the device stops communicating after roughly 48 hours and requires a power cycle to recover. How would you approach this?
+
+**Answer:** The fact that it's three out of thirty, with the same symptom and a similar time-to-failure, is the most useful clue — it says this is likely a systematic weakness exposed by time or by a specific condition during burn-in, not a random component failure. I'd treat the pilot run as a natural experiment and start by extracting every difference I can between passing and failing units: build date, component lots, assembly line, firmware version, test fixture slot, ambient temperature in the burn-in chamber, and the exact time-to-failure distribution.
+
+Then I'd focus on what "stops communicating" actually means at the electrical and firmware level. Is the device still running but the communication peripheral is wedged? Is it in a reset loop? Is the watchdog firing? I'd instrument a failing unit — or better, reproduce on a bench with logging — to capture the state at the moment of failure: rail voltages, reset line, watchdog counter, communication peripheral status registers, and any error counters. A failure that takes 48 hours to appear often points at something cumulative: a counter overflow, a memory leak or buffer that fills slowly, a thermal drift that crosses a threshold, a solder joint or connector that degrades with thermal cycling, or a leakage path that charges up over time.
+
+I'd also check whether the burn-in environment itself is a variable — chamber temperature, airflow, the test fixture's power supply behavior, or the communication harness — because a failure that only appears in burn-in may be a test-environment interaction rather than a device defect. I'd run a small number of units outside the chamber under otherwise identical conditions to separate those.
+
+Once I have a candidate mechanism, I'd confirm it by fault injection or by targeted measurement on the failing units, and I'd check whether the same mechanism could affect field units that haven't yet reached 48 hours of continuous operation — because a pilot failure like this is a signal about field risk, not just a production yield issue.
+
+**Possible follow-ups:** How would you decide whether to halt the pilot run or continue it while investigating? What would you add to the burn-in test to catch this class of failure earlier in future runs?

@@ -1,0 +1,81 @@
+# embedded-linux-bsp — Day 91
+
+## Q1: How would you approach debugging a situation where a custom board running Linux boots successfully, but a kernel driver's `probe()` function is called and returns success, yet the device is completely non-functional — no errors in the log, no timeouts, just silence?
+
+**Answer:** A silent success is one of the harder failure modes because there's no error path to follow, so I'd treat it as a "verify each assumption in the chain" problem rather than a "find the error" problem. The first thing I'd do is confirm the driver is actually talking to the hardware I think it is: dump the resource assignments the driver received (the `struct resource` base address and size, the IRQ number, the clock and regulator handles) and compare them against the schematic and the SoC's memory map. A very common cause is that the device tree node's `reg` property points at the wrong address or the wrong register bank, so `probe()` succeeds because `devm_ioremap_resource()` returned a valid mapping — just to the wrong place. Reads and writes then go into a hole or into another peripheral's registers, and nothing complains.
+
+Next I'd verify the clock and power are actually on. `probe()` returning success only means the driver's `clk_prepare_enable()` and `regulator_enable()` calls didn't return errors; it doesn't prove the clock is at the right rate or that the rail is at the right voltage. I'd read back the clock framework state (`/sys/kernel/debug/clk/clk_summary`) and, if the hardware allows, measure the rail. A peripheral that's clocked at the wrong rate or powered from a rail that's still ramping will often accept register writes and return plausible-looking values while doing nothing useful.
+
+Then I'd check whether the driver is actually performing the transactions I expect. Instrumenting with a bus analyzer or a scope on the I2C/SPI lines is the fastest way to see whether the driver is even generating traffic, and if it is, whether the slave is ACKing. If the driver thinks it's writing but the bus is silent, the problem is above the bus (wrong compatible string matched a different driver, or the driver's register offsets are wrong). If the bus shows traffic but the device doesn't respond, the problem is at the hardware or pinmux level.
+
+Pinmux is a frequent silent culprit: if the pins aren't muxed to the peripheral function, the SoC's internal bus may still accept accesses to the peripheral's register block while the external pins are floating or driven by another function. I'd check the pinmux/pinctrl state the driver requested and confirm it matches the board's actual routing.
+
+Finally, I'd add targeted `dev_dbg()`/`pr_debug()` prints (or use dynamic debug) at each step of `probe()` and the first real I/O operation, and compare against a known-good reference — either the vendor's evaluation board or a previous board revision. The goal is to find the first point where observed behavior diverges from expected, because "silence" almost always means one assumption in the chain is wrong and nothing downstream is checking it.
+
+**Possible follow-ups:**
+- If the register reads return all-ones or all-zeros, how does that change your diagnosis?
+- How would you distinguish a pinmux problem from a clock problem without a scope?
+
+## Q2: How would you approach structuring a Yocto BSP so that a board-specific kernel configuration fragment can be applied cleanly without forking the vendor's kernel recipe?
+
+**Answer:** The core principle is to never modify the vendor's kernel recipe or defconfig in place — instead, layer configuration on top through mechanisms Yocto already provides, so that when the vendor ships a kernel update you can rebase by changing a SRCREV rather than re-merging a fork.
+
+The cleanest mechanism is a kernel configuration fragment applied via `KERNEL_CONFIG_FRAGMENTS` (or the older `SRC_URI` with `.cfg` files and `KERNEL_CONFIG` handling, depending on the kernel class version). A fragment is a small file containing only the options you want to change, in `CONFIG_FOO=y` / `# CONFIG_BAR is not set` form. Yocto's `merge_config.sh` (invoked by the kernel-yocto class) merges the fragments onto the base config and then runs `olddefconfig` to resolve dependencies. This means you express intent ("enable this driver") rather than shipping a full defconfig, which would silently drift from the vendor's as they add options.
+
+I'd put the fragment in a board-specific layer — say `meta-<product>-bsp` — under `recipes-kernel/linux/linux-<vendor>/`, and add it to the kernel recipe via a `.bbappend` in that layer. The `.bbappend` should be minimal: it appends to `SRC_URI` (for the fragment file and any board-specific patches) and sets `KERNEL_CONFIG_FRAGMENTS` or the equivalent variable for the kernel class in use. The vendor's recipe itself stays untouched, so layer priority and update mechanics stay simple.
+
+A few practical details matter. First, fragments should be small and single-purpose — one fragment per feature area (e.g., `enable-can.cfg`, `enable-usb-gadget.cfg`) — so they're reviewable and can be reused across boards. Second, I'd verify the merged result with `bitbake -c menuconfig virtual/kernel` or by inspecting the generated `.config` in the work directory, and I'd add a build-time check (a `do_configure:append` that greps for the expected options) so a silent merge failure — e.g., an option that got dropped because its dependency wasn't met — fails the build instead of shipping. Third, for options that must be present for the product to function, I'd treat a missing option as a build error, not a warning.
+
+For patches (as opposed to config), the same layering applies: `.bbappend` adds them to `SRC_URI` with `SRC_URI:append`, and they live in the board layer's `files/` directory. The key discipline is that the vendor layer is treated as read-only and all product-specific deltas live in our layer, so the delta is explicit, auditable, and easy to carry forward across vendor kernel bumps.
+
+**Possible follow-ups:**
+- What happens if a fragment enables an option whose dependency isn't enabled, and how would you catch it?
+- How would you handle a board-specific patch that conflicts with a vendor patch on the same file?
+
+## Q3: How would you approach debugging a U-Boot environment where the board is supposed to boot from eMMC but intermittently falls back to a network boot that was never intended to be enabled?
+
+**Answer:** Intermittent fallback to network boot almost always means the boot flow is reaching a failure path and the fallback is the default behavior of the boot command sequence, so I'd start by understanding exactly what the boot script does on failure and why it's failing intermittently.
+
+First I'd capture the console log from a failing boot and a succeeding boot and diff them. U-Boot is verbose about what it's trying, so the point of divergence — "MMC: no card detected," a CRC error reading the boot partition, a timeout on the eMMC — usually identifies the failing stage. If the console isn't available in the field, I'd enable a persistent boot log (e.g., `bootcount`/`bootlimit` with a saved log in a redundant environment) so the failure is recorded.
+
+The most common causes of intermittent eMMC boot failure are: (1) the eMMC not being ready when U-Boot probes it — some parts need a longer power-on or reset delay, and the timing margin is marginal across temperature or unit-to-unit variation; (2) a marginal signal integrity issue on the eMMC bus (clock too fast for the board's routing, or a missing/mis-valued pull-up) that only shows up on some units or at temperature extremes; (3) the boot partition or environment being corrupted by an unclean shutdown, so the first read fails and the fallback triggers; and (4) the boot command sequence itself being written such that any `mmc` command failure falls through to `dhcp`/`tftp` because the fallback wasn't explicitly disabled.
+
+I'd address each in turn. For readiness, I'd check the eMMC datasheet's power-on and reset timing against the board's reset and power sequencing, and add explicit delays or a retry loop in the boot script if the margin is thin. For signal integrity, I'd scope the eMMC clock and data lines during a failing boot and compare against the timing budget; if it's marginal, the fix is a hardware change (slower clock mode, termination, layout) rather than a software workaround. For corruption, I'd check whether the failure correlates with power loss or reset during a write, and if so, look at whether the boot partition is being written at all and whether the environment is redundant.
+
+Crucially, I'd make the fallback explicit rather than implicit. The boot script should attempt eMMC boot, and on failure either retry a bounded number of times or halt with a clear error — not silently fall through to network boot. Network boot in a production medical device is a security and reliability hazard, so I'd remove the network boot path from the production environment entirely, or gate it behind a physical service jumper. The "intermittent" symptom is the signal that the failure path exists; the fix is both to eliminate the underlying eMMC failure and to make the failure path loud and intentional.
+
+**Possible follow-ups:**
+- How would you make the boot failure observable in a device that ships without a console?
+- If the eMMC failure only appears at low temperature, how would you characterize it before committing to a hardware change?
+
+## Q4: You're bringing up a board where the kernel boots and the root filesystem mounts, but a userspace daemon that talks to a kernel driver via `ioctl` intermittently fails with `EINTR` and aborts. Nothing is intentionally sending it signals. How would you approach this?
+
+**Answer:** `EINTR` means a blocking system call was interrupted by a signal before it completed, so the first question is: what signal, and where is it coming from? "Nothing is intentionally sending signals" usually means something is sending them unintentionally — a timer, a debugger, a watchdog, or the kernel itself.
+
+I'd start by identifying the signal. Running the daemon under `strace -f -e trace=signal,ioctl` (or attaching to it) will show the `ioctl` returning `EINTR` and the signal that arrived just before it. If `strace` isn't practical in the target environment, I'd install a signal handler that logs `siginfo_t` (signal number, sender PID, and `si_code`) for every signal received, so the source is recorded. Common culprits: `SIGALRM` from an interval timer the daemon or a library set up, `SIGCHLD` from a child process exiting, `SIGUSR1`/`SIGUSR2` from a watchdog or supervisor, or `SIGIO` if async I/O is in use.
+
+Once I know the signal, there are two independent fixes, and I'd apply both. The first is at the source: if the signal is spurious or misconfigured (e.g., a timer that was supposed to be one-shot but is periodic, or a supervisor sending a keepalive signal the daemon doesn't handle), fix the configuration so the signal isn't delivered during the critical `ioctl`. The second is at the call site: the daemon should handle `EINTR` correctly by retrying the `ioctl` rather than treating it as a fatal error. `EINTR` is a normal, expected return for a blocking call and is not an error condition — the correct pattern is a `do { ret = ioctl(...); } while (ret == -1 && errno == EINTR);` loop, or `sigaction` with `SA_RESTART` where the semantics allow it. A daemon that aborts on `EINTR` has a latent bug regardless of what's sending the signal.
+
+There's also a driver-side consideration: if the driver's `ioctl` implementation holds a lock or performs a long operation and is not interruptible, the signal may be delivered but the call may still return `EINTR` at an awkward point. I'd review the driver's `ioctl` to confirm it handles signal interruption cleanly (returns `-ERESTARTSYS` where appropriate so the kernel restarts the call, or returns `-EINTR` only when it has not consumed any state). A driver that partially completes an operation and then returns `EINTR` can leave the daemon and driver out of sync, which is worse than the abort.
+
+Finally, I'd ask why this is intermittent. If the signal is a periodic timer, the `ioctl` only gets interrupted when it happens to be blocking at the moment the timer fires — which depends on timing and load. That intermittency is consistent with a timer or supervisor signal, and it's a good reason to fix the retry logic rather than chase the timing.
+
+**Possible follow-ups:**
+- What's the difference between `-EINTR` and `-ERESTARTSYS` from a driver's perspective, and when would you use each?
+- If the signal turns out to be `SIGCHLD` from a child the daemon forks, how would you restructure the daemon to avoid the interruption?
+
+## Q5: Behavioral — You're the BSP lead for a medical device project, and during a design review the hardware team proposes moving the main processor's debug UART to a different pinmux group to free up pins for a new peripheral. The software team says the current pinmux is baked into the device tree and bootloader, and changing it risks breaking early boot console output that the manufacturing line relies on. How would you handle this situation?
+
+**Answer:** I'd treat this as a coordination and risk-management problem rather than a purely technical one, because both teams are right about something: the hardware team needs the pins, and the software team is correct that the debug UART is load-bearing for manufacturing and early bring-up.
+
+My first step would be to get the facts on the table in one place. I'd ask the hardware team to document exactly which pins the new peripheral needs, why the debug UART's current pinmux group is the one that has to move (rather than another function), and what the impact is if the move is deferred. I'd ask the software team to document exactly where the UART pinmux is configured — bootloader, device tree, or both — and what specifically depends on it: the manufacturing test fixture, the early boot console, any field service procedure. Getting both sides to write down their constraints usually reveals whether there's a cheaper option neither team considered, such as moving a different peripheral, using a pinmux group that's already free, or keeping the debug UART on its current pins and moving the new peripheral instead.
+
+If the move is genuinely necessary, I'd propose a phased approach that protects the manufacturing dependency. The key insight is that the debug UART's pinmux is a configuration, not a hardwired fact — it can be changed in the bootloader and device tree, and the manufacturing fixture can be updated in parallel. So the plan would be: (1) software updates the bootloader and device tree to the new pinmux on a branch, (2) we verify early boot console output and the manufacturing test procedure still work on the new pins, (3) manufacturing updates its fixture and procedure, and (4) we cut over together, with a documented rollback. The risk isn't the change itself; it's cutting over before manufacturing is ready, so the sequencing is what matters.
+
+I'd also make sure the decision is recorded with its rationale and owners, and that the schedule impact is visible to the project manager rather than absorbed silently by either team. If the hardware change can't be validated before a manufacturing milestone, I'd flag that explicitly as a schedule risk and let the project manager decide whether to defer the new peripheral or accept a temporary dual-configuration period.
+
+Throughout, I'd keep the tone collaborative: the goal is to find the option that satisfies both constraints, not to win the argument. In my experience these conflicts usually dissolve once both teams see the other's constraint written down, because the "obvious" conflict often has a third option.
+
+**Possible follow-ups:**
+- If manufacturing can't update its fixture in time, what would you propose as an interim measure?
+- How would you verify the new pinmux doesn't break early boot before committing to the change?
