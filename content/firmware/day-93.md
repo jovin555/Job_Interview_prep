@@ -1,0 +1,67 @@
+# firmware — Day 93
+
+## Q1: How would you approach designing a firmware module that must handle a peripheral whose interrupt rate is high enough that servicing every interrupt individually would consume an unreasonable share of CPU time?
+
+**Answer:** The first step is to quantify the problem rather than assume it — measure the actual ISR entry/exit cost and the interrupt rate, then compute the CPU budget the ISR consumes. If servicing every interrupt individually is genuinely too expensive, the standard remedy is to reduce the number of interrupts without losing data. The most common technique is to let the peripheral's own hardware buffer accumulate data and only interrupt when a threshold is reached or a DMA transfer completes, rather than on every byte or sample. That converts N interrupts into N/threshold interrupts and lets the CPU do useful work in between.
+
+If the peripheral supports DMA, that's usually the cleanest answer: configure a DMA channel to move data into a circular buffer and interrupt only on half-transfer and full-transfer events. The ISR then does almost nothing — it just signals a consumer task that a block is ready, using a semaphore or a direct-to-thread notification. The heavy lifting (parsing, processing, logging) happens in thread context at a priority that can be preempted by anything more urgent.
+
+Where DMA isn't available, a FIFO or threshold interrupt is the fallback. The key design principle is that the ISR should do the minimum possible work — acknowledge the source, move data out of the hardware register or mark a buffer boundary, and defer everything else. Any processing that can be deferred should be. I'd also look at whether the interrupt can be coalesced at the peripheral level (e.g., a "data available" flag that stays asserted until the FIFO is drained) so that a burst of events produces one interrupt rather than many.
+
+There's a trade-off to be explicit about: batching reduces CPU load but increases latency between the event and when software sees it. For a control loop that needs low latency, you may need a hybrid — a small threshold for the time-critical path and a larger batch for the logging path. I'd document the latency budget and verify it against the requirement rather than optimizing blindly.
+
+**Possible follow-ups:** How would you decide the DMA buffer size and half/full-transfer thresholds? What would you do if the consumer task can't keep up with the DMA rate and the circular buffer overruns?
+
+## Q2: How would you approach implementing a firmware module that must handle a peripheral whose data-ready signal is edge-triggered, but where the signal can occasionally glitch and produce a spurious edge that does not correspond to valid data?
+
+**Answer:** The core issue is that an edge-triggered signal carries no information about whether the underlying data is actually valid — a glitch looks identical to a real event at the interrupt controller. So the firmware has to add a validation layer rather than trusting the edge itself.
+
+The first line of defense is at the hardware/configuration level: if the MCU's GPIO or EXTI block supports it, enable a digital glitch filter or a minimum pulse-width requirement so that edges shorter than a defined threshold are rejected in hardware. That's the cheapest and most reliable fix, and it should be the first thing to check in the reference manual. If the peripheral has an internal debounce or filter, use it.
+
+Where hardware filtering isn't sufficient, the ISR should treat the edge as a hint rather than a fact. On entry, it reads the peripheral's status register to confirm that a real data-ready condition is asserted — if the status bit isn't set, the edge was spurious and the ISR simply clears the pending flag and returns. This "trust the status register, not the edge" pattern is the standard defense. It costs one register read in the ISR, which is negligible.
+
+For cases where the status register itself can be set by noise, a second layer is to validate the data payload: check a CRC, a frame header, or a plausibility range before accepting the sample. That's more expensive but catches corruption that survives the status check. The right combination depends on how critical a false sample is — for a medical monitor, you'd want both the status check and a payload validation, and you'd count and log rejected events so you can see whether the glitch rate is within expectations.
+
+I'd also make sure the ISR clears the interrupt flag correctly and re-reads the status after clearing, because some peripherals can re-assert the flag if the condition is still true — you don't want to miss a real event that arrived during the spurious one. And I'd instrument the rejection path with a counter so that field data can tell you whether the filtering is working or whether the glitch rate is climbing (which might indicate a hardware issue).
+
+**Possible follow-ups:** How would you distinguish a genuine burst of closely spaced events from a single event plus glitches? What would you do if the glitch rate is high enough that the ISR overhead itself becomes a problem?
+
+## Q3: How would you approach sizing thread stacks in a Zephyr RTOS application, and what would you do to verify that your sizing is actually correct rather than just "probably enough"?
+
+**Answer:** Stack sizing is one of those things where "it works in testing" is not evidence — the failure mode is a silent corruption that may not manifest until a rare code path runs. So I'd approach it as a measurement problem, not a guess.
+
+The starting point is to understand what consumes stack in each thread: local variables (especially large buffers and structs passed by value), the call depth of the deepest call chain, and the context-save overhead on interrupt entry. Zephyr's `CONFIG_THREAD_ANALYZER` and the `k_thread_stack_space_get()` API let you query the high-water mark — the maximum stack usage observed since the thread started. That's the key measurement: run the system through its full set of operating modes, including error paths and the deepest call chains, and then read the high-water mark. The margin you add on top should reflect the risk: a thread that runs rarely and has untested paths needs more headroom than one that's exercised constantly.
+
+For verification, I'd do three things. First, enable stack sentinel checking (`CONFIG_STACK_SENTINEL`) so that an overflow is caught deterministically rather than corrupting adjacent memory. Second, enable `CONFIG_THREAD_STACK_INFO` and periodically log high-water marks during soak testing, so you can see whether usage creeps up over time (which would indicate a leak or a path you haven't exercised). Third, for the deepest call chains, do a static analysis or a manual walk of the call graph to confirm the measured high-water mark is plausible — measurement catches what actually ran, but it can't catch a path that never ran in your test.
+
+The trap to avoid is sizing based on the "typical" case. The stack must be sized for the worst case, and the worst case is usually an error path or an interrupt nesting scenario that's hard to trigger. I'd also be careful with threads that call into libraries or the network stack, where the call depth is not obvious from your own code — those need empirical measurement plus a generous margin.
+
+**Possible follow-ups:** How would you handle a thread whose worst-case path is genuinely hard to exercise in testing? What's your approach when the measured high-water mark plus a safe margin doesn't fit in the available RAM?
+
+## Q4: How would you approach designing a firmware module that must survive a brownout — where the supply voltage sags briefly but doesn't fully drop — without corrupting persistent state or producing a spurious reset?
+
+**Answer:** A brownout is dangerous precisely because it's ambiguous: the MCU may keep running while its peripherals, flash, and analog front end are operating outside their specified voltage range, producing garbage rather than a clean reset. The design has to assume that during a brownout, anything the firmware reads or writes may be wrong.
+
+The first layer is hardware and MCU configuration: enable the brownout detector (BOD) if the part has one, and set its threshold above the minimum operating voltage of the MCU and its peripherals. When the supply crosses that threshold, the BOD should hold the MCU in reset until the supply recovers, rather than letting it run in an undefined state. That's the cleanest defense — it converts a brownout into a controlled reset. I'd also check whether the part has a power-on reset and voltage monitor with hysteresis, and configure the reset behavior so that a sag doesn't produce a rapid reset loop.
+
+The second layer is protecting persistent state. Any flash write in progress when the supply sags can leave a partially written page, so the storage scheme must be crash-safe: write to a new location and commit with a checksum or sequence number, so that on the next boot the firmware can detect an incomplete write and fall back to the last known-good record. Never overwrite the only copy of critical data in place. For configuration and calibration data, a double-buffered or log-structured scheme with a validity marker written last is the standard approach.
+
+The third layer is detecting and recovering from a brownout that was too short to trigger the BOD but long enough to corrupt a peripheral. On boot, the firmware should check a reset-cause register to distinguish a brownout reset from a power-on reset and from a watchdog reset, and re-initialize all peripherals from scratch rather than assuming their state survived. I'd also add a sanity check on any data read from a peripheral after a suspected brownout — re-read the configuration registers and compare against expected values.
+
+Finally, I'd test it: a programmable supply that ramps the voltage down and back up at various rates and depths, while the firmware is doing flash writes and ADC conversions, is the only way to know the design actually holds. The failure modes are subtle enough that bench testing at nominal voltage tells you nothing.
+
+**Possible follow-ups:** How would you distinguish a brownout reset from a watchdog reset in the reset-cause register, and why does that distinction matter? What would you do if the BOD threshold is below the minimum voltage of an external peripheral on the same rail?
+
+## Q5: You discover, late in a project, that a firmware design decision you made early on is now causing significant problems, and changing it would require rework across several modules. How would you approach this situation?
+
+**Answer:** The first thing I'd do is resist the instinct to either defend the original decision or immediately commit to a rewrite. Both are emotional responses. The productive path is to make the cost and risk of each option explicit and let the evidence drive the decision.
+
+I'd start by characterizing the problem precisely: what specifically is failing, how often, and what's the impact? A design decision that's causing occasional maintainability friction is a very different situation from one that's causing field failures or blocking a safety requirement. The severity determines how much rework is justified. I'd want data — defect rates, time lost per change, any near-misses — rather than a general sense that "this is getting painful."
+
+Then I'd lay out the options honestly. Option one is to contain the problem: keep the existing design but add an abstraction layer or adapter so that new code doesn't inherit the flaw, and migrate incrementally. Option two is a targeted refactor of the modules most affected, leaving the rest alone. Option three is the full rework. For each, I'd estimate the effort, the risk of introducing regressions, and the schedule impact — and I'd be explicit that the full rework is usually the highest-risk option late in a project, because it touches everything at the moment when there's the least time to recover from mistakes.
+
+I'd also own the original decision. If I made it, I'd say so plainly and explain what I knew at the time and what changed — that's more credible than pretending the decision was forced on me. The goal isn't to assign blame; it's to make sure the team understands why the situation arose so the same mistake isn't repeated.
+
+Finally, I'd bring the decision to the people who own the schedule and the risk — the project lead, and for a medical device, whoever owns the regulatory and quality side — with a clear recommendation and the trade-offs spelled out. A late-project architectural change is a business decision as much as a technical one, and it shouldn't be made unilaterally by the engineer who's closest to the code. I'd recommend the option that manages risk while addressing the root cause, and I'd build in a checkpoint so that if the incremental approach isn't working, we can escalate to the bigger change with evidence rather than guesswork.
+
+**Possible follow-ups:** How would you decide how much of the rework to do now versus deferring to the next release? What would you do if the project lead overrules your recommendation and insists on shipping without addressing the problem?
