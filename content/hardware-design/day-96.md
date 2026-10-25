@@ -1,0 +1,51 @@
+# hardware-design — Day 96
+
+## Q1: How would you approach selecting the switching frequency for a boost converter that must generate a 24V rail from a 5V input at 300mA, where the board is space-constrained and the rail feeds a sensitive analog load?
+
+**Answer:** The switching frequency is a multi-way trade, and I'd start by writing down the constraints rather than picking a number. Higher frequency shrinks the inductor and output capacitor — attractive on a space-constrained board — but it increases switching losses in the MOSFET and diode, raises core and skin-effect losses in the inductor, and pushes the fundamental and its harmonics up where they're harder to contain with input filtering. It also moves the ripple frequency closer to the control loop's crossover, which can complicate compensation.
+
+For a 5V-to-24V boost at 300mA, the duty cycle is high (roughly 1 − 5/24 ≈ 79%), so I'd be conscious that high duty cycle plus high frequency stresses the switch's on-time and the diode's reverse recovery. I'd shortlist something in the few-hundred-kHz to ~1MHz range, then check: does the inductor I can physically fit still have acceptable saturation current and DCR at that frequency? Does the output capacitor's ESR and ripple current rating meet the ripple target? Is the fundamental below the EMI test band where I have margin, or can I filter it?
+
+Because the rail feeds a sensitive analog load, I'd also plan post-regulation — a switching stage followed by an LDO or a well-designed LC/π filter — so the converter's ripple and switching spurs don't land directly on the analog supply. I'd verify the choice on the bench with ripple and conducted-emissions measurements rather than trusting the spreadsheet alone.
+
+**Possible follow-ups:** How would the answer change if the input were a battery whose voltage sagged to 3.0V under load? What would you check first if the converter's efficiency dropped sharply after you raised the frequency?
+
+## Q2: How would you approach choosing between a P-channel MOSFET and a P-channel-plus-charge-pump (or an integrated load switch) for reverse-polarity protection on a battery input, and what failure modes would you check?
+
+**Answer:** The core question is where the pass element sits and how it's driven. A simple P-channel MOSFET in the high-side path, with its gate tied to ground through a resistor, turns on automatically when the battery is connected correctly and blocks when it's reversed — no active drive needed, minimal quiescent current, and low dropout if I pick a device with low Rds(on). The catch is that gate drive: with a low battery voltage the gate-source voltage may be marginal, so Rds(on) rises and dissipation climbs; and the body diode orientation matters for how the FET behaves during the reverse condition.
+
+A P-channel plus charge pump (or an integrated load switch with built-in gate drive) gives me a controlled, well-defined gate voltage independent of battery level, plus often integrated features like soft-start, current limiting, and thermal shutdown. The trade is added quiescent current, cost, and complexity — and the charge pump itself is a noise source I'd need to keep away from sensitive analog.
+
+Failure modes I'd check: reverse leakage when the battery is inserted backwards (does anything conduct through the body diode?); behavior during a hot-plug transient where the input rings; gate oxide stress if the gate sees a voltage beyond its rating during a surge; and thermal margin at maximum load and minimum battery voltage, where Rds(on) is worst. I'd also confirm the part's SOA and that the body diode can't forward-bias into the load during normal operation.
+
+**Possible follow-ups:** How would you protect the gate from an overvoltage transient on the battery input? What would you measure on the bench to confirm the reverse-blocking actually works?
+
+## Q3: How would you approach selecting the feedback resistor values for a transimpedance amplifier front-end, and what trade-offs would drive the choice between a high-value and a low-value feedback resistor?
+
+**Answer:** The feedback resistor sets the transimpedance gain — output voltage per unit of photodiode current — so the first constraint is simply getting the signal into the ADC's input range without saturating. Beyond that, it's a noise-versus-bandwidth-versus-stability trade.
+
+A high-value feedback resistor gives more gain per unit current, which helps when the photocurrent is small, but it also raises the Johnson noise contribution of the resistor itself and, combined with the photodiode's junction capacitance and the op-amp's input capacitance, pushes the feedback pole down — reducing bandwidth and eating phase margin. It also makes the circuit more sensitive to the op-amp's input bias current, since that current flows through the feedback resistor and produces an offset. A low-value resistor gives wider bandwidth and lower resistor noise, but needs more gain downstream and may make the op-amp's own input-referred noise and offset more significant relative to the signal.
+
+So I'd start from the required bandwidth and the photocurrent range, pick a resistor that keeps the feedback pole comfortably above the signal bandwidth with adequate phase margin, then check the noise budget: resistor Johnson noise, op-amp input current noise times the feedback impedance, and op-amp voltage noise — all referred to the input. I'd also check the op-amp's input bias current against the offset budget, since a high-value resistor amplifies that error. Finally I'd add a feedback capacitor to tame the pole and verify stability with a step response or a network analyzer sweep.
+
+**Possible follow-ups:** How would you compensate the loop if the photodiode capacitance were large and variable? What op-amp parameters would you prioritize for a low-current measurement?
+
+## Q4: How would you approach debugging a circuit where a device works correctly on the bench but fails intermittently once it's installed in its enclosure, and the failure correlates with the device being handled or moved?
+
+**Answer:** The correlation with handling and movement points at mechanical and physical causes rather than pure electrical ones, so I'd resist the urge to immediately re-spin the schematic and instead try to reproduce and localize the fault. First I'd make the failure observable: instrument the device so I can see what actually fails — a rail dropping, a reset asserting, a communication error — and log it, because "intermittent" without a captured signature is very hard to chase.
+
+Then I'd work through the physical suspects systematically. Intermittent connections: connector seating, board-to-board headers, flex cables, and solder joints — especially on connectors and large components — are prime candidates, and I'd flex and tap the assembly while monitoring. Grounding and shielding: once enclosed, the board may couple differently to the chassis, so I'd check whether the enclosure changes the ground reference or introduces a loop. Mechanical stress: a component or trace under strain when the enclosure is closed, or a cable pinched against a sharp edge. Thermal: handling warms the board, so I'd separate "moved" from "warmed" by testing each independently.
+
+I'd use a combination of a data logger on the suspect signals, a controlled vibration or tap test, and if needed a thermal or current-probe survey. Once I had a reproducible trigger, I'd narrow to the specific net or joint with continuity checks under flex and, if necessary, X-ray or cross-section. The fix might be mechanical (strain relief, connector retention, potting) rather than electrical, so I'd keep the mechanical engineer in the loop.
+
+**Possible follow-ups:** How would you distinguish a cold solder joint from a connector contact issue without destructive testing? What design changes would you make to prevent this class of failure in the next revision?
+
+## Q5: (Behavioral) Imagine you're the lead hardware engineer on a medical device project, and during a design review the thermal engineer argues that your chosen linear regulator for a low-noise analog rail will dissipate too much power inside the sealed enclosure and proposes replacing it with a switching regulator followed by a small LDO. You believe the switching regulator's ripple and switching noise, even after the LDO, could degrade the analog front-end's noise floor. How would you handle this disagreement?
+
+**Answer:** I'd treat this as a shared engineering problem rather than a contest of positions, because both concerns are legitimate — thermal margin in a sealed enclosure is a real safety and reliability issue, and analog noise floor is a real measurement-performance issue. The productive move is to convert both arguments into numbers we can compare.
+
+I'd ask the thermal engineer for the actual dissipation estimate and the enclosure's thermal resistance so we can see how much margin we really have, and I'd bring my own noise budget: what the analog front-end needs, what the current LDO delivers, and what a switching-plus-LDO chain would contribute. Then I'd propose we test the proposed alternative rather than argue about it in the abstract — build or bench-evaluate a switching regulator followed by an LDO and measure the actual output noise and ripple at the analog rail, including the switching spurs and any low-frequency artifacts. If the measured noise meets the front-end's requirement with margin, the thermal engineer's proposal wins on the evidence and I'd support it. If it doesn't, we have concrete data to discuss alternatives: a lower-dropout linear regulator to cut dissipation, a different rail architecture, or improved thermal path.
+
+Throughout I'd keep the conversation focused on the requirement — the analog noise floor and the thermal limit are both specs, not preferences — and make sure the decision and its rationale get documented in the design review record. That way the disagreement resolves on evidence and the team owns the outcome together.
+
+**Possible follow-ups:** What measurements would you insist on before accepting the switching-regulator proposal? How would you handle it if the bench data were ambiguous and the schedule was tight?
