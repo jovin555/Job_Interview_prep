@@ -1,0 +1,53 @@
+# space-rad-hard — Day 97
+
+## Q1: How would you approach designing a radiation-tolerant analog-to-digital conversion subsystem where the ADC's voltage reference is a COTS part with no radiation data, and the measurement must hold accuracy over a multi-year mission?
+
+**Answer:** I'd start by treating the reference as the accuracy bottleneck and asking what the mission actually needs, because that determines how much mitigation is justified. The first step is to characterize the part rather than assume — even a modest test campaign (a few biased/unbiased units at a couple of dose levels, plus heavy-ion or proton exposure if budget allows) tells you whether the dominant risk is slow TID drift, ELDRS at low dose rate, or SETs on the reference output. If testing isn't feasible, I'd bound the risk analytically: look at the reference topology (bandgap vs. buried zener), the process node, and any published data on similar parts, and assume worst-case drift rather than typical.
+
+Architecturally, the key insight is that a calibration routine only helps against *slow, monotonic* drift — it does nothing for a transient SET that corrupts a single conversion, and it can't recover accuracy if the reference has shifted between calibrations. So I'd separate the two problems: for TID drift, add a periodic calibration path against a stable on-board or commanded reference, and budget the drift into the error analysis so you know how often calibration must run. For SETs, I'd add filtering and plausibility checks on the reference output, and consider a ratiometric measurement scheme where the same reference drives both the sensor excitation and the ADC, so a reference excursion partially cancels. If the accuracy requirement is tight enough that a COTS reference can't be bounded, I'd move to a rad-hard or radiation-characterized reference, or use two references with cross-checking and voting. The decision should be driven by the error budget, not by the part's marketing description.
+
+**Possible follow-ups:** How would you distinguish TID-induced reference drift from temperature drift during a ground test? What would make you decide a COTS reference is simply unacceptable for a given accuracy target?
+
+## Q2: You're reviewing a design where a junior engineer has used a single-ended, non-redundant analog signal chain — sensor, amplifier, ADC — for a measurement that feeds a control loop. The engineer argues that the digital side already has TMR, so the analog side is "covered." How would you evaluate this argument?
+
+**Answer:** The argument has a category error in it: TMR on the digital side protects against upsets in the digital logic, but it does nothing for a fault that originates in the analog front-end. If the amplifier or ADC produces a wrong value, all three TMR lanes will faithfully agree on the wrong number — TMR masks *divergence*, not *common-mode error*. So the first thing I'd do is trace the fault paths: what happens if the sensor output is corrupted by an SET, if the amplifier saturates, if the ADC's sample-and-hold is disturbed, or if the reference glitches? Each of those propagates into the control loop regardless of how much redundancy sits downstream.
+
+Then I'd look at what the control loop actually does with the measurement. If a single bad sample can command a dangerous actuator movement, the analog path needs its own protection: plausibility limits, rate-of-change checks, median filtering over a few samples, or a redundant second channel with comparison. If the loop is slow relative to the sample rate, temporal redundancy (multiple samples, voting or averaging with outlier rejection) may be cheaper and more effective than duplicating the whole analog chain. I'd also check whether the digital TMR voters are fed from a single ADC — if so, the voter inputs are correlated and the redundancy is partly illusory.
+
+The constructive framing for the review is: "TMR protects the computation, not the measurement. Let's agree on what fault the analog path must survive and design to that." That keeps it technical rather than adversarial, and it usually leads the engineer to see the gap themselves.
+
+**Possible follow-ups:** How would you decide between duplicating the analog chain and adding temporal redundancy? What's the risk of a shared ADC feeding all three TMR lanes?
+
+## Q3: How would you approach designing a fault-tolerant I²C bus for a space-deployed system where multiple sensor nodes share the same bus, given that single-event upsets can corrupt data or cause bus lock-ups?
+
+**Answer:** I²C is a deceptively fragile bus in a radiation environment because it has no built-in error detection and a well-known failure mode where a slave holds SDA low and the master can't generate a START — the bus is locked until something forces it free. So I'd design at three levels: protocol, electrical, and recovery.
+
+At the protocol level, I'd add a checksum or CRC to every transaction and a sequence number or transaction ID so a corrupted or duplicated message is detected rather than silently accepted. I'd also define a strict timeout on every transaction so a hung slave doesn't stall the master indefinitely. At the electrical level, I'd make sure the pull-ups and bus capacitance are within spec across all nodes, and consider bus isolation or segmenting so one faulty node can't drag the whole bus down — a bus switch or mux per segment lets you isolate a misbehaving node. At the recovery level, I'd implement the standard bus-clear sequence: clock SCL manually (as GPIO) up to nine times to let the stuck slave shift out its byte, then issue a STOP, then re-initiate. If that fails, power-cycle the offending segment.
+
+I'd also think about whether I²C is the right choice at all for a critical multi-node bus — RS-485 or CAN-FD with differential signaling and built-in CRC gives much better noise immunity and fault containment, at the cost of more pins and complexity. The decision depends on how critical the data is and how many nodes share the bus.
+
+**Possible follow-ups:** How would you detect which node is holding the bus low? What are the trade-offs of adding a bus switch per segment versus a single shared bus with better recovery logic?
+
+## Q4: How would you approach designing a radiation-tolerant, high-reliability power feed for a payload that has two independent 28V bus inputs, where the system must survive a shorted or latched load on one feed without losing the other, and must also handle hot-swap events without disturbing the bus?
+
+**Answer:** I'd break this into three problems: input ORing and isolation, per-feed fault containment, and hot-swap/inrush control.
+
+For the two independent 28V feeds, I'd use ideal-diode ORing (either ORing controllers with back-to-back MOSFETs or, if the voltage drop is acceptable, Schottky ORing) so either feed can carry the load alone and a fault on one feed doesn't back-feed into the other. The ORing devices need to be rated for the full bus transient and must fail safe — a shorted ORing FET would defeat the isolation, so I'd want fault detection on each ORing path.
+
+For fault containment, each downstream load should have its own current-limited switch or eFuse with a latch-up detection threshold, so a latched load trips its own protection and is isolated rather than dragging the shared rail down. The trip threshold has to be set above the load's legitimate inrush but below the SEL current, which is the tricky part — you need the load's inrush profile to set it correctly. I'd also add per-load current telemetry so the system can report and, if desired, retry a tripped load after a cool-down.
+
+For hot-swap, the concern is inrush into the bulk capacitance when a board is inserted or a feed is switched in. I'd use a hot-swap controller with programmable slew-rate/dI-dt limiting and a safe operating area (SOA) protected pass FET, plus a TVS or clamp to handle the inductive transient from the bus. The bulk cap and the hot-swap FET have to be co-designed so the FET stays inside its SOA during the worst-case inrush.
+
+Throughout, I'd derate the FETs and caps generously for the vacuum/thermal environment and verify the whole thing against the bus transient spec, not just steady-state.
+
+**Possible follow-ups:** How would you set the latch-up trip threshold when the load's inrush current is close to the SEL current? What happens if the ORing FET itself is the faulted element?
+
+## Q5: You're leading a design review where a junior engineer has proposed a solution you believe is under-margined for the radiation environment. The engineer is confident and has done real work on it. How would you handle the disagreement so that the review stays constructive and the right technical decision gets made?
+
+**Answer:** The first thing I'd do is separate the person from the proposal. The engineer has done real analysis, so I'd start by acknowledging that and asking them to walk me through their margin calculation and the assumptions behind it — often the disagreement is really about an unstated assumption (a typical vs. worst-case number, a datasheet value taken at 25°C, a radiation effect that wasn't in their model) rather than about competence. Getting the assumptions on the table turns it from "I think you're wrong" into "let's check this input together."
+
+Then I'd make the risk explicit and quantitative. If I believe the design is under-margined, I should be able to say *where* — which parameter, which worst-case corner, which radiation effect — and what the consequence is if that corner is hit. If I can't articulate that, I need to go do my homework before pushing back. I'd also invite a third perspective, either a radiation specialist or a peer reviewer, because a design review isn't a two-person argument; it's a team checking a design against requirements.
+
+If we still disagree after the analysis, I'd escalate the decision to the requirements: does the design meet the stated margin and radiation-tolerance requirements, or doesn't it? That depersonalizes the call. And I'd be open to being wrong — sometimes the junior engineer has found a legitimate reason the margin is adequate, and the review should reward that. The goal is the right decision, not winning the argument, and the way to keep it constructive is to keep every objection tied to evidence and requirements rather than to seniority.
+
+**Possible follow-ups:** What would you do if the engineer's analysis is correct but you still believe the risk is unacceptable for programmatic reasons? How do you make sure a junior engineer feels heard even when their proposal is rejected?
