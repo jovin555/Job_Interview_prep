@@ -1,0 +1,57 @@
+# space-rad-hard — Day 98
+
+## Q1: How would you approach designing a radiation-tolerant power distribution scheme for a payload where several loads share a common upstream rail, and a single-event latch-up (SEL) in any one load must not collapse the rail for the others?
+
+**Answer:** The core principle is that the shared rail must be protected from any single load's fault, so the first decision is where to place current limiting. I would not rely on a single bulk converter with one global current limit, because a latch-up in one load would drag the whole rail down before the limit engages. Instead, I would distribute the protection: each load gets its own current-limiting element — an eFuse, a current-limited load switch, or a discrete pass device with a sense resistor and comparator — sized so that its trip threshold is above that load's worst-case inrush and operating current but well below what would disturb the shared rail. That way a latched load is isolated locally and the upstream rail stays within regulation for the healthy loads.
+
+The second consideration is latch-up detection and recovery. A current limit alone holds the fault at the limit indefinitely, which may be thermally unacceptable. I would add a timed retry or latch-off scheme: detect the overcurrent, wait a defined interval, retry a limited number of times, then latch off and report the fault to the housekeeping telemetry. The retry policy has to be coordinated with the mission — a load that is safety-critical might warrant more retries, while a non-critical one can be shed permanently.
+
+Third, the upstream rail itself needs bulk capacitance and a converter with enough headroom that a transient from one load's fault does not cause a rail droop that trips other loads' undervoltage supervisors. I would analyze the worst-case fault transient against the rail's hold-up and the other loads' UVLO thresholds. Finally, I would make sure the current-limit devices are themselves radiation-tolerant or at least characterized, since a protection device that upsets is worse than none — and I would verify the scheme with fault-injection testing on the bench, shorting each load in turn and confirming the rail survives.
+
+**Possible follow-ups:** How would you size the current-limit threshold when a load's inrush current is close to its latch-up current? What telemetry would you want from each current-limit device to distinguish a latch-up from a legitimate load transient?
+
+## Q2: How would you approach selecting and qualifying a voltage supervisor or reset IC for a space-deployed system, given that most commercial parts are not radiation-characterized?
+
+**Answer:** I would start by being honest about what the part actually has to do and what failure of it means. A voltage supervisor that falsely asserts reset takes the system down; one that fails to assert reset lets the system run out of spec. Both are serious, so the qualification effort should be proportional to that criticality.
+
+The selection process has a few layers. First, I would look for any part with existing radiation data — either a rad-hard supervisor or a commercial part with published TID and SEE test results from a reputable source. If none exists, I would consider whether the function can be built from discretes or from a comparator with a characterized reference, since a simple resistor-divider-plus-comparator supervisor is easier to reason about and to test than an integrated IC with unknown internal behavior. A discrete implementation also lets me choose each element for radiation tolerance independently.
+
+If I must use an uncharacterized commercial part, I would treat it as a risk item and qualify it: TID testing at the expected mission dose with margin, and heavy-ion or proton testing for SEL and SET if the budget allows. Where full testing is not affordable, I would bound the risk by derating, by adding redundancy or a diverse backup supervisor, and by designing the system so that a supervisor failure is detectable — for example, a supervisor that can be commanded to self-test, or a cross-check between two independent supervisors. I would also check for latent issues like ELDRS sensitivity in bipolar supervisors, which can fail at low dose rate even when high-dose-rate testing passes.
+
+**Possible follow-ups:** How would you structure a diverse redundant supervisor scheme so that a common-cause failure doesn't take out both? What would you do if TID testing showed the part survived but drifted outside its specified threshold tolerance?
+
+## Q3: You're reviewing a design where a junior engineer has used a single-ended, non-redundant analog signal chain — sensor, amplifier, ADC — for a measurement that feeds a control loop. The engineer argues that the digital side already has TMR, so the analog side is "covered." How would you evaluate this argument?
+
+**Answer:** The argument has a category error in it: TMR on the digital side protects against upsets in the digital logic, but it cannot detect or correct a corrupted value that arrives at the digital side already wrong. If the analog front-end produces a bad sample — because of a single-event transient on the amplifier, a hit on the ADC reference, or a mux glitch — the TMR voters will faithfully agree on the wrong number. Redundancy downstream of a single point of failure does not remove that failure.
+
+So I would evaluate the analog chain on its own terms. First, what is the consequence of a single bad sample reaching the control loop? If the loop has enough inertia and the sample rate is high, a single transient may be filtered out naturally, and the risk is low. If the measurement is time-critical and a single wrong value can command a dangerous actuator move, then the analog chain needs its own protection. That protection can take several forms: a redundant sensor or amplifier path with comparison, a plausibility check or rate-of-change limit on the sample before it enters the control law, a median filter across a small window, or a redundant ADC channel. The right answer depends on the dynamics of the loop and the criticality of the measurement.
+
+I would also point out that the digital TMR and the analog protection are complementary, not substitutes. The design review outcome should be a documented rationale for whatever level of analog redundancy is chosen, tied to a risk assessment, rather than an assumption that digital redundancy covers everything.
+
+**Possible follow-ups:** How would you implement a plausibility check that doesn't reject legitimate fast transients in the measured signal? If you added a second ADC channel for comparison, how would you decide which channel to trust when they disagree?
+
+## Q4: How would you approach designing a radiation-tolerant, high-reliability power feed for a payload that has two independent 28V bus inputs, where the system must survive a shorted or latched load on one feed without losing the other, and must also handle hot-swap events without disturbing the bus?
+
+**Answer:** I would break this into three problems: combining the two feeds, isolating a fault on either feed, and managing hot-swap transients.
+
+For combining the feeds, the classic approach is ORing — either diode ORing or, for efficiency, ideal-diode controllers or ORing FETs. The key requirement is that a fault on one feed must not back-feed into the other or drag the combined rail down. That means each feed needs its own reverse-current protection and its own current limit, so a short on feed A is contained to feed A's branch. I would also want each branch to have its own fuse or eFuse with a defined trip characteristic, and to verify that a hard short on one branch does not cause the other branch's ORing element to see a fault current it cannot handle.
+
+For hot-swap, the concern is inrush into the downstream bulk capacitance when a board is inserted or a feed is switched in. I would use a hot-swap controller with programmable slew-rate control on the pass FET, plus a sense resistor for current limit, so the inrush is ramped rather than a step. The downstream capacitance and the slew rate have to be co-designed so the inrush stays within the bus's allowable disturbance. I would also add transient suppression — TVS or clamp diodes — at the input to handle the inductive kick from the harness during a hot-swap event.
+
+Throughout, I would derate the pass devices and the ORing elements for the worst-case bus voltage and current, and I would verify the whole scheme with fault-injection and hot-swap testing on the bench, including inserting and removing the board under load while monitoring the bus for disturbance.
+
+**Possible follow-ups:** How would you decide between diode ORing and active ORing FETs for this application? What failure modes of the hot-swap controller itself would you need to protect against?
+
+## Q5: You're leading a design review where a junior engineer has proposed a solution you believe is under-margined for the radiation environment. The engineer is confident and has done real work on it. How would you handle the disagreement so that the review stays constructive and the right technical decision gets made?
+
+**Answer:** The first thing I would do is separate the person from the proposal. The engineer has done real analysis, and that deserves respect — the review should start by acknowledging the work and asking them to walk through their reasoning, not by declaring the design wrong. Often the disagreement is really about a missing piece of information rather than a mistake, and hearing their assumptions out loud is how you find out which it is.
+
+Then I would try to make the disagreement concrete and shared rather than positional. Instead of saying "this is under-margined," I would frame it as a question about a specific number or assumption: what radiation environment are we designing to, what margin does this part have against that, and what happens if the part drifts or upsets? If the engineer's analysis used a different environment assumption or a different derating policy than the one the project has agreed, that is a factual gap we can close together. If the analysis is sound but the margin is genuinely thin, I would ask them to walk through the consequence of the part failing — sometimes that conversation itself changes the conclusion, and sometimes it reveals that the risk is acceptable and I was wrong.
+
+If we still disagree after that, I would not resolve it by authority in the room. I would escalate it to a documented risk decision: write down the concern, the engineer's counter-argument, and the consequence of each outcome, and take it to whoever owns the risk — the systems lead or the project's technical authority. That keeps the review constructive because the engineer is not being overruled personally; the decision is being made at the right level with the evidence on the table. And I would follow up afterward so the engineer knows their input was heard and the outcome is not a judgment on them.
+
+**Possible follow-ups:** What would you do if the project schedule made a redesign impractical and the under-margined part had to ship? How would you make sure a junior engineer feels able to push back on you in a future review?
+
+---
+
+*Note: Q1–Q5 draw on general space-rad-hard practice and are framed as approach/reasoning questions, not personal-achievement stories. No employer or product names are used, and no specific metrics, dates, or outcomes are claimed.*
