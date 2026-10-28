@@ -1,0 +1,59 @@
+# tools — Day 99
+
+## Q1: How would you approach setting up a simulation workflow in LTSpice for a mixed-signal board where a switching regulator and a precision analog front-end share the same supply rail, and how would you decide which simulation results are trustworthy enough to act on?
+
+**Answer:** I'd start by being explicit about what LTSpice can and cannot tell me. It's excellent for verifying the electrical behavior of the power stage — loop stability, transient load response, ripple amplitude, and the interaction between the regulator's control loop and the load's input impedance. It is not a substitute for a field solver when the question is about layout parasitics or radiated coupling, so I'd scope the model to the questions it can actually answer.
+
+The workflow I'd use: build the regulator stage first with realistic component models — not ideal capacitors, but parts with ESR/ESL and DC bias derating if the tool supports it — and confirm the loop is stable across the expected load range with a load-step transient and an AC sweep of the loop gain. Then add the analog front-end as a load model: the actual input impedance of the sensor conditioning chain, including any input filter, so the regulator sees a realistic load rather than a resistor. The interesting cases are the ones where the regulator's switching ripple lands in the front-end's passband, or where a load transient from the digital section pulls the rail down enough to disturb a high-resolution ADC reference.
+
+The trust question is the important one. I'd treat a simulation as trustworthy only after I've correlated it against a measurement on a known-good reference — for example, measuring the actual ripple and load-step response on a bench supply or an evaluation board of the same regulator, and confirming the model reproduces the same shape and order of magnitude. If the model and the measurement disagree, the model is wrong until proven otherwise, and I'd rather fix the model than act on its output. I'd also be honest about what's excluded: no package parasitics, no PCB trace inductance, no thermal drift. Those exclusions define the boundary of what the result can be used to decide.
+
+**Possible follow-ups:** How would you model the PCB trace inductance between the regulator and the analog front-end if the tool doesn't natively support it? What would make you decide a simulation result is *not* worth acting on, even if it looks alarming?
+
+## Q2: How would you approach configuring a Keil uVision project for a medical device firmware build so that the optimization level, linker script, and startup code are locked down and auditable, rather than relying on whatever the IDE defaults to?
+
+**Answer:** The core problem is that IDE project files are easy to change silently and hard to review in a diff, so the goal is to make the build configuration explicit, version-controlled, and reproducible rather than dependent on whoever last clicked through the options dialog.
+
+I'd start by treating the project file itself as a reviewed artifact — checked into version control, with changes to build settings requiring the same review as code changes. Then I'd make the critical settings explicit and documented: the optimization level per target (and why — for example, `-O0` or `-O1` during debug and validation, with a documented decision about what the release build uses and evidence that behavior is equivalent), the linker script path and its contents, and the startup file. I'd avoid relying on the IDE's default startup code by keeping an explicit, reviewed startup file in the project.
+
+For auditability, I'd want the build to be reproducible: a clean checkout plus a documented toolchain version should produce a binary that matches what was tested. That means pinning the compiler/toolchain version, recording it alongside the release, and ideally generating a build log or map file that captures the actual flags used and the memory layout. The map file is especially valuable — it shows where everything landed, which is exactly what you need to prove that calibration data or bootloader regions aren't being overwritten.
+
+I'd also add a pre-build or CI check that fails if the optimization level or linker script doesn't match the expected configuration for that target, so a silent change gets caught rather than discovered during formal verification.
+
+**Possible follow-ups:** How would you demonstrate to a reviewer that the release build behaves the same as the debug build, given the optimization difference? What would you put in the build log to make a regulatory audit straightforward?
+
+## Q3: How would you approach setting up a logic analyzer's protocol decoder for a custom, non-standard serial protocol on a medical device, where the framing doesn't match any built-in decoder — for example, a proprietary sensor bus with a non-byte-aligned frame header?
+
+**Answer:** When no built-in decoder fits, I'd resist the temptation to force the signal into the nearest standard decoder and instead build the decode from the physical layer up, because a wrong decoder produces confident-looking but meaningless output.
+
+First I'd characterize the physical layer: capture the raw waveform, confirm the idle state, the clock or bit period, and where the frame boundaries actually are. For a non-byte-aligned header, the key is to find the sync pattern or start condition and measure its exact bit offset from the sample clock, so I can define the frame start precisely rather than assuming byte alignment. I'd set the sample rate high enough — typically several times the bit rate — that I can resolve edge positions and any jitter, and I'd verify the threshold level is set correctly for the logic family in use.
+
+Then I'd build the decoder in stages. Many logic analyzers let you define a custom protocol with a state machine or a scripted decoder; I'd start with just the sync/header detection and confirm it triggers on every frame and only on real frames, then add field extraction one field at a time, checking each against a known-good capture. Where the tool's scripting is limited, I'd export the raw samples and decode offline in a script, which also gives me a reusable, version-controlled decoder I can hand to the firmware team.
+
+The validation step matters most: I'd capture a transaction where I already know the expected values — from firmware debug output or a reference implementation — and confirm the decoder reproduces them exactly, including the non-aligned header bits. Only then would I trust it to debug an intermittent failure.
+
+**Possible follow-ups:** How would you handle a protocol where the bit period varies slightly between frames? What would you do if the decoder works on the bench but produces garbage when the bus is under load?
+
+## Q4: How would you approach using a spectrum analyzer's tracking generator and a directional coupler to characterize the input impedance of a custom analog front-end, and how would you decide whether the measurement is trustworthy enough to act on?
+
+**Answer:** The measurement is essentially a reflection measurement: the tracking generator sweeps a known signal into the front-end through a directional coupler, and the analyzer measures the reflected power, from which I compute return loss and then impedance. The setup details are where most of the error creeps in, so I'd be methodical about them.
+
+First, calibration. I'd calibrate out the test setup — cables, coupler, and any adapter — using open/short/load standards at the reference plane where the front-end connects, so the measurement reflects the device and not the fixture. Without that, the cable and coupler parasitics dominate at higher frequencies and the result is meaningless. I'd also confirm the tracking generator output level is low enough not to drive the front-end's active devices into nonlinearity, because a compressed input looks like a very different impedance than the small-signal one.
+
+Then I'd sweep across the band of interest and look at return loss. A well-matched front-end shows a broad, smooth low-reflection region; a resonance or a sharp notch suggests the input filter or a parasitic is doing something I didn't intend. I'd compare the measured impedance against the design target and against the source impedance the front-end is supposed to see.
+
+The trust decision comes from cross-checking. I'd verify the setup by measuring a known reference — a precision resistor or a characterized attenuator — and confirming the analyzer reports the expected impedance. I'd repeat the measurement with a different coupler or a different cable length to confirm the result is stable and not a fixture artifact. And I'd sanity-check against the schematic: if the measured impedance disagrees wildly with what the input network should present, I'd suspect the fixture or the calibration before I'd believe the front-end is broken.
+
+**Possible follow-ups:** How would you handle a front-end that's active and powered during the measurement — what changes about the calibration? What would a resonance in the return-loss sweep tell you about the input filter?
+
+## Q5: (Behavioral) Imagine you're leading a project where a junior engineer has set up the lab's spectrum analyzer and near-field probe for an EMI pre-compliance scan, and you discover the resolution bandwidth and detector mode are set for a quick "get a feel for it" scan rather than the settings the test standard requires. The engineer is confident the settings are fine because "the peaks show up either way." The formal scan is scheduled for tomorrow, and the lab time is booked. How would you handle this situation?
+
+**Answer:** My first move is to separate the technical issue from the interpersonal one, because both need handling and conflating them makes each worse.
+
+Technically, the engineer isn't wrong that the peaks show up — a fast scan with a wide resolution bandwidth and a peak detector will reveal *where* emissions are. The problem is that the amplitude readings aren't comparable to the limit line, and the detector mode changes what the measurement means: a peak detector overstates quasi-peak and average limits, while the wrong RBW can smear or hide closely spaced emissions. So the scan is useful for locating sources but not for declaring pass or fail. I'd explain that distinction concretely rather than just asserting the settings are wrong — showing the same emission measured under both settings, and how the number moves, is usually more persuasive than a standards citation.
+
+Practically, I'd check whether the correct settings can be applied and the scan re-run within the booked lab time. A pre-compliance scan with proper RBW and detector settings is slower, so I'd prioritize the frequency bands and operating modes that matter most, and accept that we may not cover everything in one session. If the lab time genuinely can't accommodate a full correct scan, I'd rather get a correct partial result and schedule a follow-up than produce a full set of numbers that can't be trusted.
+
+On the people side, I'd be careful not to make it a public correction. The engineer did real work and the instinct — get a quick look first — is reasonable; the gap is knowing what the standard requires and why. I'd frame it as "here's what the standard needs and here's how we get there in the time we have," and I'd make sure the corrected procedure gets written down so it's not a one-off correction. The goal is that next time the setup is right the first time, not that the engineer feels caught out.
+
+**Possible follow-ups:** How would you decide which bands to prioritize if you can't re-scan everything in the available lab time? What would you do if the engineer pushed back and argued the quick scan is sufficient for a pre-compliance check?
